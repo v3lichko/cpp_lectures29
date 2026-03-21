@@ -1,0 +1,5847 @@
+\documentclass[a4paper,12pt]{article}
+\usepackage[T2A]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[russian]{babel}
+\usepackage{graphicx}
+\usepackage{listingsutf8}   % UTF-8 в lstlisting (вместо listings)
+\usepackage{xcolor}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath}
+
+\geometry{margin=2.5cm}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=cyan
+}
+
+\lstset{
+    language=C++,
+    inputencoding=utf8,
+    extendedchars=true,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{gray}\itshape,
+    stringstyle=\color{red!70!black},
+    showstringspaces=false,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    backgroundcolor=\color{gray!8},
+    tabsize=4,
+    captionpos=b,
+    xleftmargin=1.5em,
+    framexleftmargin=1.5em
+}
+
+\title{\textbf{Лекции по C++}\\\large 2 семестр}
+\author{Дмитрий Величко}
+\date{Март 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% -------------------------------------------------------
+\section{Исключения в C++}
+
+% -------------------------------------------------------
+\subsection{Ключевое слово \texttt{throw}}
+
+\subsubsection{Базовый синтаксис}
+
+Рассмотрим функцию деления:
+
+\begin{lstlisting}
+#include <stdexcept>
+
+int divide(int a, int b) {
+    if (b == 0) {
+        throw std::invalid_argument("division by zero");
+    }
+    return a / b;
+}
+\end{lstlisting}
+
+При делении на ноль поведение программы неопределено, поэтому используется
+ключевое слово \texttt{throw}. Бросать можно \textbf{любое выражение},
+однако принято бросать объекты стандартных исключений из
+\texttt{<stdexcept>}.
+
+\texttt{throw} --- один из способов выйти из функции наряду с
+\texttt{return}.
+
+\subsubsection{Что можно бросать?}
+
+\textbf{Любой копируемый или перемещаемый объект:}
+
+\begin{lstlisting}
+throw 42;                                  // int
+throw std::string("error");               // std::string
+throw std::runtime_error("fail");         // стандартное исключение
+throw 3.14;                               // double
+throw std::vector<int>{1, 2, 3};          // даже вектор (но не стоит)
+
+struct MyError { int code; std::string msg; };
+throw MyError{404, "not found"};          // пользовательская структура
+\end{lstlisting}
+
+\textbf{Рекомендация:} бросайте только наследников \texttt{std::exception}.
+Это позволяет единообразно ловить все ошибки через
+\texttt{catch(const std::exception\&)}.
+
+\subsubsection{Что происходит при \texttt{throw}?}
+
+\begin{enumerate}
+    \item Объект исключения \textbf{копируется} (или перемещается) в специальную
+          область памяти, управляемую рантаймом.
+    \item Начинается \textbf{раскрутка стека} (stack unwinding).
+    \item Управление передаётся первому подходящему блоку \texttt{catch}.
+    \item Если подходящего \texttt{catch} нет --- вызывается
+          \texttt{std::terminate()}.
+\end{enumerate}
+
+\subsubsection{\texttt{throw} как выражение}
+
+\texttt{throw} --- это выражение типа \texttt{void}. Его можно использовать
+в тернарном операторе и других контекстах:
+
+\begin{lstlisting}
+int safe_divide(int a, int b) {
+    return b != 0 ? a / b : throw std::invalid_argument("zero divisor");
+}
+
+// В лямбде:
+auto get_or_throw = [](std::optional<int> opt) -> int {
+    return opt.has_value() ? *opt : throw std::runtime_error("empty");
+};
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Раскрутка стека (Stack Unwinding)}
+
+\subsubsection{Определение}
+
+При выбросе исключения происходит \textbf{раскрутка стека} (stack
+unwinding) --- автоматическое уничтожение всех локальных объектов
+в обратном порядке их создания, с вызовом деструкторов, по цепочке
+вызовов от точки \texttt{throw} до подходящего блока \texttt{catch}.
+
+\subsubsection{Пошаговая механика}
+
+\begin{lstlisting}
+#include <iostream>
+#include <stdexcept>
+
+struct Guard {
+    std::string name;
+    Guard(std::string n) : name(std::move(n)) {
+        std::cout << "  + " << name << "\n";
+    }
+    ~Guard() {
+        std::cout << "  - " << name << "\n";
+    }
+};
+
+void f3() {
+    Guard g("f3_local");
+    throw std::runtime_error("boom");  // (1) Бросаем исключение
+    // Код ниже НИКОГДА не выполнится
+    std::cout << "after throw\n";
+}
+
+void f2() {
+    Guard g("f2_local");
+    f3();                               // (2) Вызываем f3
+    std::cout << "after f3\n";          // Не выполнится
+}
+
+void f1() {
+    Guard g("f1_local");
+    f2();                               // (3) Вызываем f2
+    std::cout << "after f2\n";          // Не выполнится
+}
+
+int main() {
+    try {
+        f1();
+    } catch (const std::exception& e) {
+        std::cout << "Caught: " << e.what() << "\n";
+    }
+}
+\end{lstlisting}
+
+\textbf{Вывод:}
+\begin{lstlisting}[numbers=none]
+  + f1_local
+  + f2_local
+  + f3_local
+  - f3_local       <- раскрутка: уничтожается f3_local
+  - f2_local       <- раскрутка: уничтожается f2_local
+  - f1_local       <- раскрутка: уничтожается f1_local
+Caught: boom
+\end{lstlisting}
+
+Обратите внимание: деструкторы вызываются в \textbf{обратном порядке} создания
+(LIFO), а строки \texttt{"after ..."} не выполняются --- управление <<перепрыгивает>>
+через них.
+
+\subsubsection{Визуализация стека}
+
+\begin{lstlisting}[numbers=none]
+Стек вызовов в момент throw:
+
+|  f3()  | <- throw runtime_error("boom")
+|  f2()  |    ~Guard("f3_local")
+|  f1()  |    ~Guard("f2_local")
+| main() |    ~Guard("f1_local")
++--------+    catch (const std::exception& e) <- сюда попадаем
+\end{lstlisting}
+
+Рантайм <<разматывает>> стек снизу вверх: для каждого кадра уничтожает
+локальные объекты, затем переходит к следующему, пока не найдёт \texttt{catch}.
+
+\subsubsection{Что уничтожается, а что нет}
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Объект} & \textbf{Уничтожается?} & \textbf{Почему} \\
+\midrule
+Локальные переменные на стеке  & Да  & RAII \\
+Объекты, созданные \texttt{new}  & Нет & Нет владельца на стеке \\
+\texttt{std::unique\_ptr}        & Да  & Деструктор вызовет \texttt{delete} \\
+\texttt{std::shared\_ptr}        & Да  & Деструктор уменьшит счётчик \\
+Сырые указатели (\texttt{int*})  & Да\textsuperscript{*} & Но память \textbf{не} освобождается! \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textsuperscript{*}Переменная-указатель уничтожается, но \texttt{delete} для неё
+никто не вызывает --- это \textbf{утечка памяти}.
+
+\begin{lstlisting}
+void leak_example() {
+    int* raw = new int(42);          // Выделили память
+    std::unique_ptr<int> safe(new int(43));  // RAII-обёртка
+
+    throw std::runtime_error("oops");
+
+    delete raw;  // НИКОГДА не выполнится -> утечка!
+    // safe -- деструктор unique_ptr вызовет delete автоматически
+}
+\end{lstlisting}
+
+\textbf{Мораль:} именно поэтому RAII критически важен. Любой ресурс
+(память, файл, мьютекс, соединение) должен быть обёрнут в объект с деструктором.
+
+\subsubsection{Частично сконструированные объекты}
+
+Если исключение вылетает \textbf{из конструктора}, деструктор этого объекта
+\textbf{не вызывается} (объект не считается созданным). Но деструкторы уже
+инициализированных полей \textbf{вызываются}:
+
+\begin{lstlisting}
+struct Resource {
+    Resource(int id) { std::cout << "R(" << id << ")\n"; }
+    ~Resource()      { std::cout << "~R\n"; }
+};
+
+struct Widget {
+    Resource a, b, c;
+
+    Widget() : a(1), b(2), c(3) {
+        // Допустим, конструктор c бросил исключение
+        // Тогда:
+        //   a -- уничтожается (был создан)
+        //   b -- уничтожается (был создан)
+        //   c -- НЕ уничтожается (не был до конца создан)
+        //   ~Widget() -- НЕ вызывается (Widget не был создан)
+    }
+};
+\end{lstlisting}
+
+\begin{lstlisting}
+struct Dangerous {
+    Resource a{1};
+    Resource b{2};
+
+    Dangerous() {
+        Resource* raw = new Resource(3);
+        throw std::runtime_error("oops");
+        delete raw;  // Утечка! ~Dangerous() не вызовется,
+                     // но ~a и ~b вызовутся
+    }
+};
+\end{lstlisting}
+
+\subsubsection{Раскрутка стека и массивы}
+
+При раскрутке массива деструкторы вызываются только для
+\textbf{уже сконструированных} элементов:
+
+\begin{lstlisting}
+struct Item {
+    static int count;
+    Item() {
+        if (++count == 4) throw std::runtime_error("4th item");
+        std::cout << "Item(" << count << ")\n";
+    }
+    ~Item() { std::cout << "~Item\n"; }
+};
+int Item::count = 0;
+
+void test() {
+    Item arr[5];
+    // Создаётся Item(1), Item(2), Item(3)
+    // Item(4) бросает исключение
+    // Раскрутка: ~Item для arr[2], arr[1], arr[0] (в обратном порядке)
+    // arr[3] и arr[4] не были созданы -- деструкторы не вызываются
+}
+\end{lstlisting}
+
+\subsubsection{Когда раскрутка НЕ происходит}
+
+\begin{itemize}
+    \item \textbf{Не пойманное исключение:} если нигде нет подходящего
+          \texttt{catch}, стандарт гарантирует только вызов
+          \texttt{std::terminate()}. Раскрутка стека
+          \textit{implementation-defined} --- может произойти, а может и нет.
+    \item \textbf{\texttt{std::abort()} / \texttt{std::\_Exit()}:} немедленное
+          завершение без раскрутки.
+    \item \textbf{Нарушение \texttt{noexcept}:} если функция помечена
+          \texttt{noexcept} и из неё вылетает исключение ---
+          \texttt{std::terminate()} без гарантированной раскрутки.
+\end{itemize}
+
+% -------------------------------------------------------
+\subsection{try / catch}
+
+\subsubsection{Базовый синтаксис}
+
+\begin{lstlisting}
+#include <iostream>
+#include <stdexcept>
+
+int main() {
+    try {
+        divide(1, 0);
+    } catch (const std::exception& e) {
+        std::cout << e.what() << "\n";
+    }
+}
+\end{lstlisting}
+
+\begin{itemize}
+    \item Метод \texttt{what()} определён в \texttt{std::exception}
+          и возвращает строку с описанием ошибки --- ту самую, что
+          была передана при создании объекта исключения.
+    \item Исключение следует ловить \textbf{по константной ссылке},
+          чтобы избежать лишнего копирования и сохранить полиморфизм.
+\end{itemize}
+
+\subsubsection{Множественные блоки \texttt{catch}}
+
+\begin{lstlisting}
+try {
+    do_something();
+} catch (const std::out_of_range& e) {
+    // Обработка выхода за границы
+    std::cerr << "Index error: " << e.what() << "\n";
+} catch (const std::invalid_argument& e) {
+    // Обработка неверного аргумента
+    std::cerr << "Bad argument: " << e.what() << "\n";
+} catch (const std::exception& e) {
+    // Все остальные стандартные исключения
+    std::cerr << "Error: " << e.what() << "\n";
+} catch (...) {
+    // Абсолютно любое исключение (включая int, string и т.д.)
+    std::cerr << "Unknown error\n";
+}
+\end{lstlisting}
+
+\textbf{Правила:}
+\begin{itemize}
+    \item Блоки \texttt{catch} проверяются \textbf{сверху вниз},
+          побеждает \textbf{первый подходящий}.
+    \item \texttt{catch(...)} ловит \textbf{всё}, поэтому должен быть последним.
+    \item Более специфичные обработчики ставятся \textbf{перед} более общими.
+\end{itemize}
+
+\subsubsection{Ловля по значению vs по ссылке}
+
+\begin{lstlisting}
+// ПЛОХО: ловля по значению -- срезка (slicing)!
+try {
+    throw std::runtime_error("specific error");
+} catch (std::exception e) {
+    // e -- копия, тип СРЕЗАН до std::exception
+    // e.what() может вернуть не то, что ожидали
+}
+
+// ХОРОШО: ловля по константной ссылке
+try {
+    throw std::runtime_error("specific error");
+} catch (const std::exception& e) {
+    // e -- ссылка на исходный объект, полиморфизм сохранён
+    // e.what() вернёт "specific error"
+}
+\end{lstlisting}
+
+При ловле по значению происходит \textbf{object slicing}: если бросили
+наследника, а поймали базовый тип, часть данных наследника \textbf{теряется}.
+
+\subsubsection{Вложенные try/catch}
+
+\begin{lstlisting}
+void process() {
+    try {
+        try {
+            throw std::runtime_error("inner");
+        } catch (const std::logic_error& e) {
+            std::cout << "logic: " << e.what() << "\n";  // Не подходит
+        }
+        // runtime_error не пойман внутренним catch -- летит дальше
+    } catch (const std::exception& e) {
+        std::cout << "outer: " << e.what() << "\n";  // "outer: inner"
+    }
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Приведение типов в \texttt{catch}}
+
+В \texttt{catch} \textbf{не работают} обычные неявные преобразования
+и правила перегрузки. Доступны только:
+\begin{itemize}
+    \item Добавление \texttt{const} / приведение к ссылке
+    \item Приведение типа потомка к типу родителя
+\end{itemize}
+
+\begin{lstlisting}
+try {
+    throw 1;  // int
+} catch (double d) {
+    std::cout << "double\n";    // не поймает: int -> double не работает
+} catch (long long l) {
+    std::cout << "long long\n"; // не поймает: int -> long long не работает
+} catch (...) {
+    std::cout << "other\n";     // поймает
+}
+\end{lstlisting}
+
+\subsubsection{Наследование в \texttt{catch}}
+
+Блоки \texttt{catch} проверяются \textbf{сверху вниз}, побеждает
+первый подходящий:
+
+\begin{lstlisting}
+struct Mom {};
+struct Son : Mom {};
+
+int main() {
+    try {
+        throw Son{};
+    } catch (const Mom& m) {
+        std::cout << "Mom\n"; // поймает: Son приводится к Mom
+    } catch (const Son& s) {
+        std::cout << "Son\n"; // сюда не дойдём
+    } catch (...) {
+        std::cout << "other\n";
+    }
+}
+\end{lstlisting}
+
+\textbf{Вывод:} \texttt{Mom}. Именно поэтому обработчики потомков
+нужно ставить \textbf{перед} обработчиками родителей, иначе они
+никогда не сработают.
+
+\subsubsection{Правильный порядок}
+
+\begin{lstlisting}
+try {
+    throw Son{};
+} catch (const Son& s) {
+    std::cout << "Son\n";  // Теперь поймает!
+} catch (const Mom& m) {
+    std::cout << "Mom\n";  // Ловит остальных наследников Mom
+} catch (...) {
+    std::cout << "other\n";
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Где встречаются исключения в стандартной библиотеке}
+
+\begin{center}
+\begin{tabular}{lp{7cm}}
+\toprule
+\textbf{Операция} & \textbf{Исключение} \\
+\midrule
+\texttt{vector::at(i)}
+    & \texttt{std::out\_of\_range} при \texttt{i >= size()} \\
+\addlinespace
+\texttt{operator new}
+    & \texttt{std::bad\_alloc} при нехватке памяти \\
+\addlinespace
+\texttt{dynamic\_cast<T\&>(ref)}
+    & \texttt{std::bad\_cast} при неудачном приведении \\
+\addlinespace
+\texttt{std::stoi("abc")}
+    & \texttt{std::invalid\_argument} (не число) \\
+\addlinespace
+\texttt{std::stoi("99999999999")}
+    & \texttt{std::out\_of\_range} (переполнение) \\
+\addlinespace
+\texttt{map::at(key)}
+    & \texttt{std::out\_of\_range} при отсутствии ключа \\
+\addlinespace
+\texttt{optional::value()}
+    & \texttt{std::bad\_optional\_access} если пуст \\
+\addlinespace
+\texttt{variant::get<T>()}
+    & \texttt{std::bad\_variant\_access} при неверном типе \\
+\addlinespace
+\texttt{thread::join()} на отсоединённом
+    & \texttt{std::system\_error} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\subsection{Runtime-ошибки vs Исключения C++}
+
+Это \textbf{принципиально разные вещи}.
+
+\subsubsection{Три вида runtime-ошибок на уровне ОС}
+
+\begin{center}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{Сигнал} & \textbf{Типичные причины} \\
+\midrule
+\texttt{SIGSEGV} (Segfault)
+    & Выход за пределы массива, разыменование \texttt{nullptr},
+      переполнение стека \\
+\addlinespace
+\texttt{SIGFPE} (Floating Point Exception)
+    & Деление целого на ноль, переполнение целых \\
+\addlinespace
+\texttt{SIGABRT} (Aborted)
+    & Вызов \texttt{std::abort()}, \texttt{std::terminate()},
+      падение \texttt{assert} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\medskip
+Эти ошибки \textbf{не являются} исключениями C++ и \textbf{не ловятся}
+через \texttt{catch}:
+
+\begin{lstlisting}
+int arr[5];
+try {
+    arr[10] = 42;  // SIGSEGV -- catch не поймает
+} catch (...) {
+    // сюда мы НЕ попадём
+}
+
+try {
+    int x = 1 / 0;  // SIGFPE -- тоже не исключение C++
+} catch (...) {
+    // и сюда не попадём
+}
+\end{lstlisting}
+
+\textbf{Важно:} деление на ноль --- это исключение на уровне
+\textit{процессора}, не языка. Процессор обращается к ОС, которая
+посылает \texttt{SIGFPE}. Это совпадение терминологии, но разные
+уровни абстракции.
+
+\subsubsection{Пути к \texttt{std::terminate()}}
+
+\begin{itemize}
+    \item Не пойманное исключение (uncaught exception)
+    \item Явный вызов \texttt{std::terminate()} или \texttt{std::abort()}
+    \item Упавший \texttt{assert} (он напрямую вызывает \texttt{abort()})
+    \item Исключение из \texttt{noexcept}-функции
+    \item Исключение из деструктора во время раскрутки стека
+    \item Два одновременных активных исключения (double exception)
+\end{itemize}
+
+С точки зрения ОС программа, завершившаяся из-за не пойманного C++-исключения,
+получает вердикт \texttt{SIGABRT}.
+
+Также стоит отметить, что \texttt{std::runtime\_error} ---
+это \textit{частный случай} \texttt{std::exception}, то есть обычное
+C++-исключение, не имеющее отношения к SIGFPE/SIGSEGV/SIGABRT.
+
+% -------------------------------------------------------
+\subsection{Копирование при броске исключения}
+
+\begin{lstlisting}
+#include <iostream>
+
+struct A {
+    A()         { std::cout << "A()\n"; }
+    ~A()        { std::cout << "~A()\n"; }
+    A(const A&) { std::cout << "A(copy)\n"; }
+};
+
+void f(int x) {
+    A a;
+    if (x == 0) {
+        throw a;  // объект копируется в специальную память
+    }
+}
+
+int main() {
+    try {
+        f(0);
+    } catch (...) {
+        std::cout << "caught!\n";
+    }
+}
+\end{lstlisting}
+
+\textbf{Порядок вывода:}
+\begin{enumerate}
+    \item \texttt{A()} --- создание \texttt{a} на стеке
+    \item \texttt{A(copy)} --- копирование в специальную память при \texttt{throw}
+    \item \texttt{\textasciitilde A()} --- уничтожение \texttt{a} при раскрутке стека
+    \item \texttt{caught!}
+    \item \texttt{\textasciitilde A()} --- уничтожение копии при выходе из \texttt{catch}
+\end{enumerate}
+
+\medskip
+\begin{itemize}
+    \item \texttt{catch(A a)} --- ещё одно копирование из дин.\ памяти на стек.
+    \item \texttt{catch(A\& a)} --- работаем прямо с объектом исключения, без копирования.
+    \item \texttt{catch(const A\& a)} --- то же, но без возможности модификации
+          (рекомендуемый вариант).
+\end{itemize}
+
+\subsubsection{Где хранится объект исключения?}
+
+Стандарт не специфицирует точное место хранения. На практике ---
+в \textbf{динамической памяти}. Исключение: \texttt{std::bad\_alloc} ---
+при нехватке памяти нельзя выделить новую, поэтому компилятор заранее
+резервирует буфер в \textbf{статической памяти}
+(\textit{emergency buffer}).
+
+Исключения дороги по стоимости: выделение динамической памяти происходит
+в любом случае. Поэтому их не стоит использовать в горячих путях кода.
+
+\subsubsection{Оптимизация: \texttt{throw} временного объекта}
+
+\begin{lstlisting}
+// Лишнее копирование:
+void bad() {
+    std::runtime_error err("fail");
+    throw err;  // Копирование err в специальную память
+}
+
+// Без лишнего копирования:
+void good() {
+    throw std::runtime_error("fail");  // Объект создаётся сразу в спец. памяти
+                                        // Компилятор может применить copy elision
+}
+\end{lstlisting}
+
+\subsubsection{Повторный проброс}
+
+\begin{lstlisting}
+try {
+    f(0);
+} catch (const A& a) {
+    throw;      // прокидываем то же исключение дальше (без копирования)
+    // throw a; // создаём НОВЫЙ объект -- возможна срезка типа!
+}
+\end{lstlisting}
+
+\textbf{Критическая разница:}
+\begin{itemize}
+    \item \texttt{throw;} --- пробрасывает \textbf{оригинальный} объект исключения.
+          Тип сохраняется. Нет копирования.
+    \item \texttt{throw a;} --- создаёт \textbf{новый} объект, копируя \texttt{a}.
+          Если реальный тип --- наследник, происходит \textbf{object slicing}!
+\end{itemize}
+
+\begin{lstlisting}
+struct Base { virtual const char* what() const { return "Base"; } };
+struct Derived : Base { const char* what() const override { return "Derived"; } };
+
+void demonstrate_slicing() {
+    try {
+        throw Derived{};
+    } catch (const Base& e) {
+        std::cout << e.what() << "\n";  // "Derived" (полиморфизм)
+        // throw;                        // Пробросит Derived -- правильно
+        throw e;                         // Пробросит Base -- СРЕЗКА!
+    }
+}
+\end{lstlisting}
+
+\textbf{Правило: всегда используйте \texttt{throw;} без аргумента для повторного
+проброса.}
+
+Если исключение не поймано нигде --- гарантируется только вызов
+\texttt{std::terminate()}. Деструкторы при этом могут не вызваться.
+
+% -------------------------------------------------------
+\subsection{Спецификатор \texttt{noexcept}}
+
+\subsubsection{Что такое \texttt{noexcept}?}
+
+\texttt{noexcept} --- спецификатор, обещающий компилятору, что функция
+\textbf{не бросает исключений}:
+
+\begin{lstlisting}
+void safe_function() noexcept {
+    // Если отсюда вылетит исключение -- std::terminate()
+}
+
+int add(int a, int b) noexcept {
+    return a + b;  // Действительно не бросает
+}
+\end{lstlisting}
+
+\subsubsection{Зачем это нужно?}
+
+\begin{enumerate}
+    \item \textbf{Оптимизация:} компилятор может генерировать более
+          эффективный код, зная, что исключений не будет (не нужна таблица
+          раскрутки для этой функции).
+    \item \textbf{Семантика \texttt{std::vector}:} при реаллокации вектор
+          использует \texttt{std::move\_if\_noexcept}. Если конструктор перемещения
+          помечен \texttt{noexcept} --- элементы перемещаются. Если нет ---
+          \textbf{копируются} (для strong exception safety).
+    \item \textbf{Документация:} явное указание контракта функции.
+\end{enumerate}
+
+\begin{lstlisting}
+class MyString {
+public:
+    // Без noexcept -- vector будет КОПИРОВАТЬ при реаллокации
+    MyString(MyString&& other) { /* ... */ }
+
+    // С noexcept -- vector будет ПЕРЕМЕЩАТЬ (быстрее!)
+    // MyString(MyString&& other) noexcept { /* ... */ }
+};
+
+std::vector<MyString> vec;
+vec.push_back(MyString());  // Реаллокация: move или copy?
+\end{lstlisting}
+
+\subsubsection{Условный \texttt{noexcept}}
+
+\texttt{noexcept} может принимать выражение:
+
+\begin{lstlisting}
+template<typename T>
+void swap_values(T& a, T& b) noexcept(noexcept(T(std::move(a)))) {
+    T tmp = std::move(a);
+    a = std::move(b);
+    b = std::move(tmp);
+}
+// noexcept, если конструктор перемещения T -- noexcept
+\end{lstlisting}
+
+\texttt{noexcept(expr)} как оператор возвращает \texttt{true}/\texttt{false}:
+
+\begin{lstlisting}
+static_assert(noexcept(42 + 1));           // true -- арифметика не бросает
+static_assert(!noexcept(std::stoi("42"))); // false -- stoi может бросить
+
+void f() noexcept;
+static_assert(noexcept(f()));              // true -- f помечена noexcept
+\end{lstlisting}
+
+\subsubsection{Что будет, если \texttt{noexcept}-функция бросит?}
+
+\begin{lstlisting}
+void oops() noexcept {
+    throw std::runtime_error("surprise!");  // Компилируется!
+}
+
+int main() {
+    try {
+        oops();
+    } catch (...) {
+        // Сюда мы НЕ попадём!
+    }
+    // Программа завершится через std::terminate()
+}
+\end{lstlisting}
+
+Компилятор \textbf{не проверяет} тело \texttt{noexcept}-функции на наличие
+\texttt{throw}. \texttt{noexcept} --- это \textbf{обещание} программиста,
+а не проверка компилятора. Нарушение --- \texttt{std::terminate()}.
+
+\subsubsection{Что помечать \texttt{noexcept}?}
+
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+\textbf{Функция} & \texttt{noexcept}? \\
+\midrule
+Деструкторы                    & Да (по умолчанию с C++11) \\
+Move-конструкторы              & Да, если возможно \\
+Move-присваивание              & Да, если возможно \\
+\texttt{swap()}                & Да, если возможно \\
+Функции, работающие с памятью  & Зависит \\
+Функции с внешними вызовами    & Обычно нет \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Важно:} деструкторы в C++11 и новее \textbf{неявно}
+\texttt{noexcept}. Исключение из деструктора --- почти всегда
+\texttt{std::terminate()}.
+
+% -------------------------------------------------------
+\subsection{Исключения в деструкторах}
+
+\subsubsection{Почему нельзя бросать из деструктора?}
+
+Деструкторы вызываются при раскрутке стека. Если во время раскрутки
+(уже есть активное исключение) деструктор бросит \textbf{второе} исключение ---
+в C++ не может быть двух активных исключений одновременно, и вызывается
+\texttt{std::terminate()}:
+
+\begin{lstlisting}
+struct Bad {
+    ~Bad() noexcept(false) {
+        throw std::runtime_error("from destructor");
+    }
+};
+
+void example() {
+    try {
+        Bad b;
+        throw std::runtime_error("first");
+        // Начинается раскрутка стека
+        // Вызывается ~Bad(), который бросает ВТОРОЕ исключение
+        // -> std::terminate()!
+    } catch (...) {
+        // Сюда не дойдём
+    }
+}
+\end{lstlisting}
+
+\subsubsection{Как обрабатывать ошибки в деструкторе?}
+
+\begin{lstlisting}
+class FileWriter {
+    FILE* file_;
+public:
+    ~FileWriter() {
+        // Вариант 1: проглотить исключение (обычный подход)
+        try {
+            if (file_ && fclose(file_) != 0) {
+                // Логируем ошибку, но НЕ бросаем
+                std::cerr << "Warning: failed to close file\n";
+            }
+        } catch (...) {
+            // Никогда не позволяем исключению покинуть деструктор
+        }
+    }
+
+    // Вариант 2: явный метод close() -- пользователь вызовет заранее
+    void close() {
+        if (file_ && fclose(file_) != 0) {
+            throw std::runtime_error("close failed");
+        }
+        file_ = nullptr;
+    }
+};
+\end{lstlisting}
+
+\subsubsection{Функция \texttt{std::uncaught\_exceptions()}}
+
+C++17 добавил \texttt{std::uncaught\_exceptions()} (с~<<s>>!), которая
+возвращает \textbf{количество} активных непойманных исключений. Это позволяет
+деструктору узнать, вызван ли он в процессе раскрутки:
+
+\begin{lstlisting}
+class ScopeGuard {
+    int exceptions_on_entry_;
+    std::function<void()> on_success_;
+    std::function<void()> on_failure_;
+public:
+    ScopeGuard(std::function<void()> success, std::function<void()> failure)
+        : exceptions_on_entry_(std::uncaught_exceptions())
+        , on_success_(std::move(success))
+        , on_failure_(std::move(failure))
+    {}
+
+    ~ScopeGuard() {
+        if (std::uncaught_exceptions() > exceptions_on_entry_) {
+            on_failure_();   // Деструктор вызван из-за исключения
+        } else {
+            on_success_();   // Нормальный выход из области видимости
+        }
+    }
+};
+
+void test() {
+    ScopeGuard guard(
+        []{ std::cout << "Success!\n"; },
+        []{ std::cout << "Failure!\n"; }
+    );
+    throw std::runtime_error("oops");  // "Failure!"
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Function-try-block}
+
+Особый синтаксис \texttt{try/catch} для \textbf{всего тела функции},
+включая список инициализации конструктора:
+
+\begin{lstlisting}
+class Connection {
+    DatabaseHandle db_;
+    Logger log_;
+
+public:
+    Connection(const std::string& url)
+    try : db_(url), log_("connection.log")  // Если db_ или log_ бросят --
+    {                                        // поймаем ниже
+        db_.connect();
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Failed to create Connection: " << e.what() << "\n";
+        // ВАЖНО: для конструктора исключение автоматически перебрасывается!
+        // Объект НЕ был создан, вернуть его нельзя
+    }
+};
+\end{lstlisting}
+
+\textbf{Особенности function-try-block в конструкторах:}
+\begin{itemize}
+    \item В \texttt{catch} блоке \textbf{нельзя} обратиться к полям объекта ---
+          они уже могут быть уничтожены.
+    \item Исключение \textbf{автоматически перебрасывается} при выходе из
+          \texttt{catch}. Подавить его невозможно --- объект не был создан.
+    \item Можно заменить исключение на другое через \texttt{throw other;}.
+\end{itemize}
+
+Для обычных функций function-try-block просто оборачивает всё тело:
+
+\begin{lstlisting}
+int parse(const std::string& s)
+try {
+    return std::stoi(s);
+}
+catch (const std::exception& e) {
+    std::cerr << "Parse failed: " << e.what() << "\n";
+    return -1;  // Для обычных функций -- можно вернуть значение
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Гарантии безопасности исключений (Exception Safety)}
+
+При проектировании функций и классов важно определить, какие \textbf{гарантии}
+они предоставляют в случае исключения.
+
+\subsubsection{Четыре уровня гарантий}
+
+\begin{center}
+\begin{tabular}{lp{4cm}p{5cm}}
+\toprule
+\textbf{Гарантия} & \textbf{Суть} & \textbf{Пример} \\
+\midrule
+\textbf{No-throw}
+    & Функция никогда не бросает исключений
+    & Деструкторы, \texttt{swap()}, \texttt{noexcept}-функции \\
+\addlinespace
+\textbf{Strong} (строгая)
+    & При исключении состояние объекта откатывается к исходному (<<всё или ничего>>)
+    & \texttt{vector::push\_back}, \texttt{std::atomic} операции \\
+\addlinespace
+\textbf{Basic} (базовая)
+    & При исключении объект в \textit{валидном}, но \textit{неопределённом} состоянии. Утечек нет
+    & \texttt{std::string::operator=} (если аллокация не удалась) \\
+\addlinespace
+\textbf{No guarantee}
+    & Никаких гарантий. Возможны утечки и повреждение данных
+    & Код без RAII \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Пример: строгая гарантия в \texttt{push\_back}}
+
+\begin{lstlisting}
+template<typename T>
+void vector<T>::push_back(const T& value) {
+    if (sz_ == cap_) {
+        // 1. Выделяем новую память
+        T* newarr = allocate(cap_ * 2);  // Может бросить bad_alloc
+                                           // Но старые данные не тронуты!
+
+        // 2. Копируем/перемещаем элементы
+        try {
+            copy_or_move(arr_, newarr, sz_);  // Может бросить
+        } catch (...) {
+            deallocate(newarr);  // Откатываемся: освобождаем новую память
+            throw;               // Пробрасываем -- старый вектор цел!
+        }
+
+        // 3. Успех: заменяем старое на новое
+        deallocate(arr_);
+        arr_ = newarr;
+        cap_ *= 2;
+    }
+    new (arr_ + sz_) T(value);  // Может бросить -- но вектор в валидном состоянии
+    ++sz_;
+}
+\end{lstlisting}
+
+\subsubsection{Copy-and-swap idiom --- строгая гарантия для \texttt{operator=}}
+
+\begin{lstlisting}
+class MyString {
+    char* data_;
+    size_t size_;
+public:
+    // Строгая гарантия через copy-and-swap:
+    MyString& operator=(MyString other) {  // (1) Копия -- может бросить
+        swap(other);                        // (2) Swap -- noexcept
+        return *this;                       // (3) Старые данные в other
+    }                                       //     other уничтожится в деструкторе
+
+    void swap(MyString& other) noexcept {
+        std::swap(data_, other.data_);
+        std::swap(size_, other.size_);
+    }
+};
+\end{lstlisting}
+
+Идея: копирование (шаг 1) может бросить, но исходный объект ещё не тронут.
+\texttt{swap} (шаг 2) гарантированно не бросает. Если шаг 1 бросил ---
+исходный объект остался в прежнем состоянии (строгая гарантия).
+
+% -------------------------------------------------------
+\subsection{\texttt{std::exception\_ptr} --- исключения между потоками}
+
+\texttt{std::exception\_ptr} позволяет \textbf{захватить} исключение,
+сохранить его и \textbf{перебросить} позже --- в том числе в другом потоке.
+
+\subsubsection{Основные функции}
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Функция} & \textbf{Описание} \\
+\midrule
+\texttt{std::current\_exception()}
+    & Захватывает текущее исключение (внутри \texttt{catch}) и возвращает
+      \texttt{exception\_ptr} \\
+\addlinespace
+\texttt{std::rethrow\_exception(ptr)}
+    & Перебрасывает исключение, хранимое в \texttt{ptr} \\
+\addlinespace
+\texttt{std::make\_exception\_ptr(e)}
+    & Создаёт \texttt{exception\_ptr} из объекта \texttt{e} без
+      входа в \texttt{catch} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Пример: передача исключения между потоками}
+
+\begin{lstlisting}
+#include <exception>
+#include <thread>
+#include <iostream>
+
+void worker(std::exception_ptr& eptr) {
+    try {
+        // Какая-то работа, которая может бросить
+        throw std::runtime_error("error in worker thread");
+    } catch (...) {
+        eptr = std::current_exception();  // Захватываем исключение
+    }
+}
+
+int main() {
+    std::exception_ptr eptr = nullptr;
+
+    std::thread t(worker, std::ref(eptr));
+    t.join();
+
+    // Теперь в основном потоке:
+    if (eptr) {
+        try {
+            std::rethrow_exception(eptr);  // Перебрасываем
+        } catch (const std::exception& e) {
+            std::cout << "From worker: " << e.what() << "\n";
+            // "From worker: error in worker thread"
+        }
+    }
+}
+\end{lstlisting}
+
+\subsubsection{Пример: сбор нескольких исключений}
+
+\begin{lstlisting}
+#include <exception>
+#include <vector>
+
+std::vector<std::exception_ptr> errors;
+
+void process_item(int item) {
+    try {
+        if (item % 3 == 0)
+            throw std::runtime_error("bad item: " + std::to_string(item));
+        // Обычная обработка...
+    } catch (...) {
+        errors.push_back(std::current_exception());
+    }
+}
+
+int main() {
+    for (int i = 0; i < 10; ++i) {
+        process_item(i);
+    }
+
+    std::cout << "Errors: " << errors.size() << "\n";
+    for (auto& eptr : errors) {
+        try {
+            std::rethrow_exception(eptr);
+        } catch (const std::exception& e) {
+            std::cout << "  - " << e.what() << "\n";
+        }
+    }
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{\texttt{std::nested\_exception} --- вложенные исключения}
+
+Иногда при обработке одного исключения возникает другое. C++11 позволяет
+\textbf{вложить} оригинальное исключение внутрь нового:
+
+\begin{lstlisting}
+#include <exception>
+#include <stdexcept>
+#include <iostream>
+
+void low_level() {
+    throw std::runtime_error("disk I/O error");
+}
+
+void mid_level() {
+    try {
+        low_level();
+    } catch (...) {
+        // std::throw_with_nested оборачивает текущее исключение внутрь нового
+        std::throw_with_nested(
+            std::runtime_error("mid_level failed")
+        );
+    }
+}
+
+void high_level() {
+    try {
+        mid_level();
+    } catch (...) {
+        std::throw_with_nested(
+            std::runtime_error("high_level failed")
+        );
+    }
+}
+\end{lstlisting}
+
+\subsubsection{Распаковка вложенных исключений}
+
+\begin{lstlisting}
+void print_exception_chain(const std::exception& e, int depth = 0) {
+    std::cout << std::string(depth * 2, ' ') << e.what() << "\n";
+    try {
+        std::rethrow_if_nested(e);  // Перебрасывает вложенное, если есть
+    } catch (const std::exception& nested) {
+        print_exception_chain(nested, depth + 1);
+    } catch (...) {
+        std::cout << std::string((depth + 1) * 2, ' ') << "unknown\n";
+    }
+}
+
+int main() {
+    try {
+        high_level();
+    } catch (const std::exception& e) {
+        print_exception_chain(e);
+    }
+}
+\end{lstlisting}
+
+\textbf{Вывод:}
+\begin{lstlisting}[numbers=none]
+high_level failed
+  mid_level failed
+    disk I/O error
+\end{lstlisting}
+
+Это аналог <<exception chaining>> в Java и Python.
+
+% -------------------------------------------------------
+\subsection{Стоимость исключений: zero-cost exception model}
+
+Современные компиляторы (GCC, Clang) используют \textbf{table-based}
+(zero-cost) модель исключений:
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+& \textbf{Нормальный путь} (без исключений) & \textbf{При броске исключения} \\
+\midrule
+Накладные расходы
+    & \textbf{Нулевые}. Никаких дополнительных инструкций
+    & Высокие: поиск по таблицам, раскрутка стека \\
+\addlinespace
+Размер бинарника
+    & Увеличивается (таблицы раскрутки хранятся в секции \texttt{.eh\_frame})
+    & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Принцип:} <<платите только когда бросаете>>. На нормальном пути
+исполнения нет вообще никаких затрат --- ни проверок, ни сохранения контекста.
+Но когда исключение летит, стоимость \textbf{очень высокая} (в 10--100 раз
+дороже обычного \texttt{return}).
+
+\begin{lstlisting}[numbers=none]
+Бросок исключения (приблизительно):
+  1. Выделение памяти для объекта исключения        ~100 нс
+  2. Поиск обработчика по таблицам (DWARF unwind)   ~1-10 мкс
+  3. Раскрутка стека (вызов деструкторов)            ~1-10 мкс
+  Итого: ~2-20 мкс
+
+Обычный return:                                     ~1 нс
+\end{lstlisting}
+
+\textbf{Вывод:} исключения --- для \textbf{исключительных} ситуаций,
+а не для управления потоком выполнения. Для ожидаемых ошибок (парсинг,
+валидация) используйте \texttt{std::expected} или коды возврата.
+
+% -------------------------------------------------------
+\subsection{Итого: чек-лист по исключениям}
+
+\begin{center}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{Правило} & \textbf{Почему} \\
+\midrule
+Бросайте наследников \texttt{std::exception}
+    & Единообразная обработка \\
+\addlinespace
+Ловите по \texttt{const\&}
+    & Нет копирования, нет срезки \\
+\addlinespace
+Пробрасывайте через \texttt{throw;} (без аргумента)
+    & Сохранение типа, нет срезки \\
+\addlinespace
+Помечайте деструкторы \texttt{noexcept}
+    & Они и так \texttt{noexcept} с C++11, но не бросайте из них \\
+\addlinespace
+Помечайте move-конструкторы \texttt{noexcept}
+    & Иначе \texttt{vector} будет копировать, а не перемещать \\
+\addlinespace
+Используйте RAII для ресурсов
+    & Раскрутка стека вызывает только деструкторы \\
+\addlinespace
+Не используйте исключения в горячих путях
+    & Бросок в $\sim$1000$\times$ дороже \texttt{return} \\
+\addlinespace
+Обработчики потомков --- перед родителями
+    & \texttt{catch} проверяется сверху вниз \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\newpage
+\section{Контейнеры и итераторы}
+
+\subsection{\texttt{std::vector}: реализация изнутри}
+
+Начнём с устройства \texttt{std::vector} и в первую очередь рассмотрим
+реализацию метода \texttt{push\_back}.
+
+Структура вектора состоит из трёх полей: указателя на данные \texttt{arr\_},
+размера \texttt{sz\_} и ёмкости \texttt{cap\_}.
+
+\subsubsection{Почему нельзя писать \texttt{new T[newcap]}}
+
+При реаллокации наивная реализация могла бы выглядеть так:
+
+\begin{lstlisting}
+T* newarr = new T[newcap]; // проблема!
+\end{lstlisting}
+
+Это не работает по двум причинам:
+\begin{itemize}
+    \item Мы не знаем, есть ли у \texttt{T} конструктор по умолчанию.
+    \item Нам нужно выделить \textit{сырую} память и заполнять её по мере
+          надобности, а не создавать все объекты сразу.
+\end{itemize}
+
+\subsubsection{Placement new}
+
+Решение --- выделить сырую память через \texttt{char}, а объекты
+создавать по месту с помощью \textbf{placement new}:
+
+\begin{lstlisting}
+new (ptr) T(args...);  // создаёт объект T по адресу ptr
+\end{lstlisting}
+
+Почему нельзя просто написать \texttt{newarr[i] = arr\_[i]}?
+Потому что \texttt{newarr} указывает на сырые байты --- объекта
+\texttt{T} там ещё нет, и присваивать можно только существующему объекту.
+\texttt{memcpy} тоже не подходит: он не работает корректно, если объект
+содержит указатель или ссылку на своё собственное поле
+(например, \texttt{std::string} с small-string optimization или
+декартово дерево).
+
+\subsubsection{Почему нельзя \texttt{delete[] arr\_}}
+
+При освобождении старой памяти нельзя писать \texttt{delete[] arr\_}:
+это вызовет деструктор для каждого из \texttt{cap\_} слотов, хотя
+реальных объектов там только \texttt{sz\_}. Нужно:
+\begin{enumerate}
+    \item вручную вызвать деструктор для каждого существующего объекта;
+    \item освободить сырую память через
+          \texttt{delete[] reinterpret\_cast<char*>(arr\_)}.
+\end{enumerate}
+
+\subsubsection{Реализация \texttt{reserve}}
+
+\begin{lstlisting}
+template<typename T>
+class vector {
+    T*     arr_;
+    size_t sz_;
+    size_t cap_;
+
+    void reserve(size_t newcap) {
+        T* newarr = reinterpret_cast<T*>(new char[newcap * sizeof(T)]);
+        size_t i = 0;
+        try {
+            for (; i < sz_; ++i)
+                new (newarr + i) T(arr_[i]); // placement new
+        } catch (...) {
+            for (size_t k = 0; k < i; ++k)
+                (newarr + k)->~T();
+            delete[] reinterpret_cast<char*>(newarr);
+            throw;
+        }
+        for (size_t k = 0; k < sz_; ++k)
+            (arr_ + k)->~T();
+        delete[] reinterpret_cast<char*>(arr_);
+        arr_ = newarr;
+        cap_ = newcap;
+    }
+\end{lstlisting}
+
+\textbf{Обработка исключений в \texttt{reserve}:}
+\begin{itemize}
+    \item Если \texttt{new char[...]} бросает \texttt{std::bad\_alloc}
+          --- мы просто не выделили память, ничего не испорчено, вылетаем наверх.
+    \item Если placement new бросает исключение в конструкторе на шаге \texttt{i}
+          --- нужно уничтожить уже созданные объекты (с 0 по \texttt{i-1}),
+          освободить \texttt{newarr} и перебросить исключение.
+\end{itemize}
+
+\subsubsection{Реализация \texttt{push\_back}}
+
+\begin{lstlisting}
+    void push_back(const T& value) {
+        if (sz_ == cap_)
+            reserve(cap_ > 0 ? cap_ * 2 : 1);
+        new (arr_ + sz_) T(value);
+        ++sz_;
+    }
+}; // конец class vector
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{\texttt{vector<bool>}: специализация с битовым хранением}
+
+\texttt{vector<bool>} --- это печально известная специализация,
+которая ломает многие интуитивные ожидания от вектора.
+
+\textbf{Идея:} хранить элементы побитово, упаковывая по 8 штук в \texttt{char}.
+Это экономит память, но делает невозможным взять ссылку \texttt{bool\&} на
+отдельный элемент --- ссылка не может указывать на отдельный бит.
+
+\subsubsection{Прокси-класс \texttt{BitReference}}
+
+Чтобы сохранить синтаксис \texttt{v[i] = true}, вводится прокси-класс:
+
+\begin{lstlisting}
+template<>
+class vector<bool> {
+    char*  arr_;
+    size_t sz_;
+    size_t cap_;
+
+    struct BitReference {
+        char*   cell;
+        uint8_t idx;
+
+        BitReference(char* cell, uint8_t idx) : cell(cell), idx(idx) {}
+
+        void operator=(bool b) {
+            if (b) *cell |=  (1 << idx);
+            else   *cell &= ~(1 << idx);
+        }
+
+        operator bool() const {
+            return *cell & (1 << idx);
+        }
+    };
+
+public:
+    BitReference operator[](size_t idx) {
+        return BitReference(arr_ + idx / 8, idx % 8);
+    }
+};
+\end{lstlisting}
+
+\subsubsection{Трюк Ильи Мещерина: узнать тип выражения}
+
+\begin{lstlisting}
+template<typename T>
+class Debug {
+    Debug(T) = delete;
+};
+
+int main() {
+    std::vector<bool> v(10);
+    v[5] = true;
+    // Debug d(v[5]); -- компилятор скажет тип: std::__bit_reference
+}
+\end{lstlisting}
+
+\textbf{Почему это проблема:} \texttt{vector<bool>} нарушает концепцию
+контейнера --- из него нельзя взять настоящую ссылку на элемент
+(\texttt{bool\& r = v[5]} не скомпилируется), и многие шаблонные
+алгоритмы ломаются при работе с ним. Поэтому для хранения битовых флагов
+часто предпочитают \texttt{std::vector<char>} или \texttt{std::bitset}.
+
+% -------------------------------------------------------
+\newpage
+\section{Библиотека \texttt{<algorithm>}}
+
+\subsection{Зачем она вообще нужна}
+
+Стандартная библиотека предоставляет \textbf{готовые алгоритмы},
+которые работают с любыми контейнерами через \textbf{итераторы}.
+Ключевая идея: алгоритм не знает, что за контейнер перед ним ---
+он получает пару итераторов \texttt{[begin, end)} и работает с ними.
+
+\begin{lstlisting}
+#include <algorithm>
+#include <vector>
+
+int main() {
+    int arr[] = {5, 3, 1, 4, 2};
+    std::sort(arr, arr + 5);
+
+    std::vector<int> v = {5, 3, 1, 4, 2};
+    std::sort(v.begin(), v.end());
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{\texttt{std::sort}}
+
+Сортирует диапазон \textbf{на месте}. Сложность: $O(n \log n)$ (introsort).
+
+\begin{lstlisting}
+std::vector<int> v = {5, 3, 1, 4, 2};
+std::sort(v.begin(), v.end()); // по возрастанию
+
+std::sort(v.begin(), v.end(), [](int a, int b) {
+    return a > b; // по убыванию
+});
+\end{lstlisting}
+
+\textbf{Важно:} компаратор должен задавать \textit{строгий слабый порядок}
+(\texttt{<}, а не \texttt{<=}). Если написать \texttt{a >= b} --- UB.
+
+% -------------------------------------------------------
+\subsection{\texttt{std::find} и \texttt{std::find\_if}}
+
+Линейный поиск. Возвращает итератор на первый подходящий элемент,
+или \texttt{last} если ничего не нашли.
+
+\begin{lstlisting}
+std::vector<int> v = {1, 2, 3, 4, 5};
+
+auto it = std::find(v.begin(), v.end(), 3);
+if (it != v.end()) std::cout << *it; // 3
+
+auto it2 = std::find_if(v.begin(), v.end(), [](int x) {
+    return x % 2 == 0; // первый чётный -> 2
+});
+\end{lstlisting}
+
+\texttt{end()} как «не найдено» --- универсальное соглашение, потому что
+алгоритм не знает о типе контейнера и не может вернуть \texttt{-1}.
+
+% -------------------------------------------------------
+\subsection{\texttt{std::count} и \texttt{std::count\_if}}
+
+\begin{lstlisting}
+std::vector<int> v = {1, 2, 2, 3, 2, 4};
+int cnt  = std::count(v.begin(), v.end(), 2);                      // 3
+int even = std::count_if(v.begin(), v.end(), [](int x){ return x%2==0; }); // 4
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{\texttt{std::for\_each} и \texttt{std::transform}}
+
+\begin{lstlisting}
+std::vector<int> v = {1, 2, 3, 4, 5};
+
+std::for_each(v.begin(), v.end(), [](int& x) { x *= 2; });
+// v == {2, 4, 6, 8, 10}
+
+std::vector<int> out(v.size());
+std::transform(v.begin(), v.end(), out.begin(), [](int x) {
+    return x * x;
+});
+// out == {4, 16, 36, 64, 100}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{\texttt{std::copy} и \texttt{std::back\_inserter}}
+
+\begin{lstlisting}
+std::vector<int> src = {1, 2, 3, 4, 5};
+std::vector<int> evens;
+
+std::copy_if(src.begin(), src.end(), std::back_inserter(evens),
+             [](int x) { return x % 2 == 0; });
+// evens == {2, 4}
+\end{lstlisting}
+
+\texttt{std::back\_inserter} --- итератор-адаптер, который при присваивании
+вызывает \texttt{push\_back}. Нужен, когда выходной контейнер изначально пуст.
+
+% -------------------------------------------------------
+\subsection{Идиома erase-remove}
+
+\texttt{std::remove} \textbf{не удаляет} элементы --- он лишь сдвигает
+нужные в начало и возвращает итератор на новый логический конец.
+Реальное удаление делает \texttt{erase}:
+
+\begin{lstlisting}
+std::vector<int> v = {1, 2, 3, 2, 4, 2, 5};
+v.erase(std::remove(v.begin(), v.end(), 2), v.end());
+// v == {1, 3, 4, 5}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{\texttt{std::accumulate} из \texttt{<numeric>}}
+
+\begin{lstlisting}
+#include <numeric>
+std::vector<int> v = {1, 2, 3, 4, 5};
+int sum     = std::accumulate(v.begin(), v.end(), 0);             // 15
+int product = std::accumulate(v.begin(), v.end(), 1,
+              [](int acc, int x) { return acc * x; });            // 120
+\end{lstlisting}
+
+% -------------------------------------------------------
+\newpage
+\section{Дек (\texttt{std::deque})}
+
+\subsection{Инвалидация указателей и ссылок в \texttt{vector}}
+
+\begin{lstlisting}
+std::vector<int> v(10);
+int* p = &v[5];
+int& x = v[5];
+v.push_back(1);      // реаллокация!
+std::cout << *p;     // UB -- pointer invalidation
+std::cout << x;      // UB -- reference invalidation
+\end{lstlisting}
+
+При \texttt{push\_back} вектор мог реаллоцироваться. Старый кусок
+памяти нам больше не принадлежит --- все указатели и ссылки на элементы,
+полученные до реаллокации, недействительны.
+
+\subsection{Два главных отличия дека от вектора}
+
+\begin{enumerate}
+    \item \texttt{std::deque} \textbf{не инвалидирует} указатели и ссылки
+          на существующие элементы при добавлении новых.
+    \item Дек умеет \texttt{push\_front()} и \texttt{pop\_front()} за $O(1)$.
+\end{enumerate}
+
+\subsection{Внутреннее устройство дека}
+
+Дек хранит \textbf{массив указателей на бакеты} фиксированного размера ---
+\texttt{T** arr\_}.
+
+\begin{itemize}
+    \item При \texttt{push\_back}: идём вправо по бакету; когда бакет
+          заполнен --- выделяем новый бакет справа.
+    \item При \texttt{push\_front}: идём влево; когда бакет заполнен ---
+          выделяем новый бакет слева и кладём элемент с его конца.
+    \item Дек хранит две пары: (номер бакета начала, индекс внутри него)
+          и (номер бакета конца, индекс внутри него).
+\end{itemize}
+
+\textbf{Почему не инвалидируются указатели?} При переполнении внешнего
+массива реаллоцируется только он --- перепривязываются указатели на бакеты.
+Сами бакеты с элементами остаются на месте.
+
+\textbf{\texttt{operator[]} за $O(1)$:} зная индекс начала и размер бакета,
+пересчитываем номер бакета и смещение за константное время.
+
+\medskip
+У дека нет \texttt{reserve()} и \texttt{shrink\_to\_fit()} --- элементы
+разбросаны по бакетам, и их нельзя реаллоцировать одним куском.
+
+% -------------------------------------------------------
+\section{Адаптеры контейнеров}
+
+\texttt{std::stack}, \texttt{std::queue} и \texttt{std::priority\_queue}
+--- это \textbf{не контейнеры}, а \textbf{адаптеры}: они оборачивают
+контейнер и предоставляют ограниченный интерфейс поверх него.
+
+\begin{lstlisting}
+std::stack<int>                    s;   // по умолчанию на deque
+std::stack<int, std::vector<int>>  s2;  // на vector
+std::stack<int, std::list<int>>    s3;  // на list
+\end{lstlisting}
+
+\subsection{\texttt{std::stack}}
+
+\begin{lstlisting}
+template<typename T, typename Container = std::deque<T>>
+class stack {
+    Container c_;
+public:
+    void   push(const T& val) { c_.push_back(val); }
+    void   pop()              { c_.pop_back(); }
+    T&     top()              { return c_.back(); }
+    bool   empty() const      { return c_.empty(); }
+    size_t size()  const      { return c_.size(); }
+};
+\end{lstlisting}
+
+\textbf{Почему \texttt{pop()} возвращает \texttt{void}?}
+Если бы \texttt{pop()} возвращал значение, пришлось бы скопировать
+элемент перед удалением. Если конструктор копирования бросит исключение
+--- элемент уже удалён и значение потеряно. Разделение на \texttt{top()}
+(посмотреть) и \texttt{pop()} (удалить) даёт exception safety.
+Вернуть ссылку тоже нельзя: после \texttt{pop()} она стала бы битой.
+
+% -------------------------------------------------------
+\newpage
+\section{Итераторы и их категории}
+
+\subsection{Что такое итератор}
+
+Итератор --- это тип, который позволяет \textbf{обходить последовательность}.
+Это обобщение указателя: его можно разыменовать (\texttt{*it}),
+инкрементировать (\texttt{++it}) и сравнивать (\texttt{it != end}).
+Обычный сырой указатель --- полноценный итератор.
+
+Range-based for --- синтаксический сахар:
+\begin{lstlisting}
+for (int x : s) { ... }
+// разворачивается в:
+for (auto it = s.begin(); it != s.end(); ++it) { ... }
+\end{lstlisting}
+Достаточно реализовать \texttt{begin()} и \texttt{end()}.
+
+\subsection{Категории итераторов}
+
+\begin{center}
+\begin{tabular}{lp{5.2cm}p{4cm}}
+\toprule
+\textbf{Категория} & \textbf{Что умеет} & \textbf{Примеры} \\
+\midrule
+\texttt{InputIterator}
+    & \texttt{*it}, \texttt{++it}, \texttt{==}, \texttt{!=}
+    & потоковые итераторы \\
+\addlinespace
+\texttt{ForwardIterator}
+    & + гарантия повторного прохода
+    & \texttt{unordered\_set}, \texttt{forward\_list} \\
+\addlinespace
+\texttt{BidirectionalIterator}
+    & + \texttt{-{}-it}
+    & \texttt{list}, \texttt{set}, \texttt{map} \\
+\addlinespace
+\texttt{RandomAccessIterator}
+    & + \texttt{it+=n}, \texttt{it[n]}, \texttt{<}, \texttt{>}
+    & \texttt{deque} \\
+\addlinespace
+\texttt{ContiguousIterator}
+    & + гарантия непрерывности памяти
+    & \texttt{vector}, \texttt{array}, указатель \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\medskip
+Разница между \texttt{Input} и \texttt{Forward}: \texttt{InputIterator}
+не гарантирует, что при повторном проходе увидим те же данные (поток ---
+прочитанное не вернёшь). \texttt{ForwardIterator} эту гарантию даёт.
+
+\subsection{\texttt{iterator\_traits}}
+
+Для получения информации об итераторе внутри шаблонной функции:
+
+\begin{lstlisting}
+template<typename It>
+void foo(It begin, It end) {
+    typename std::iterator_traits<It>::value_type x = *begin;
+    using Cat = typename std::iterator_traits<It>::iterator_category;
+}
+\end{lstlisting}
+
+Доступные поля: \texttt{value\_type}, \texttt{reference}, \texttt{pointer},
+\texttt{difference\_type}, \texttt{iterator\_category}.
+
+Почему не \texttt{auto x = *begin}? Для \texttt{vector<bool>} \texttt{auto}
+выведет \texttt{BitReference}, а не \texttt{bool}. \texttt{value\_type}
+вернёт правильный тип.
+
+\subsection{Реализация \texttt{std::distance}}
+
+\begin{lstlisting}
+template<typename It>
+typename std::iterator_traits<It>::difference_type
+distance(It first, It last) {
+    if constexpr (std::is_same_v<
+        typename std::iterator_traits<It>::iterator_category,
+        std::random_access_iterator_tag>)
+    {
+        return last - first;  // O(1)
+    }
+    typename std::iterator_traits<It>::difference_type i = 0;
+    for (; first != last; ++first, ++i) {}
+    return i;                 // O(n)
+}
+\end{lstlisting}
+
+\texttt{if constexpr} вычисляется на этапе компиляции: невыбранная ветка
+не компилируется вообще. Это позволяет писать \texttt{last - first} не
+боясь, что для non-random-access итератора это не скомпилируется.
+
+\subsection{Реализация итератора вектора}
+
+\begin{lstlisting}
+template<typename T>
+class Vector {
+public:
+    class Iterator {
+    public:
+        using iterator_category = std::random_access_iterator_tag;
+        using value_type        = T;
+        using difference_type   = std::ptrdiff_t;
+        using pointer           = T*;
+        using reference         = T&;
+
+        explicit Iterator(pointer ptr) : ptr_(ptr) {}
+
+        reference operator*()  const { return *ptr_; }
+        pointer   operator->() const { return  ptr_; }
+
+        Iterator& operator++()    { ++ptr_; return *this; }
+        Iterator  operator++(int) { Iterator tmp = *this; ++ptr_; return tmp; }
+        Iterator& operator--()    { --ptr_; return *this; }
+        Iterator  operator--(int) { Iterator tmp = *this; --ptr_; return tmp; }
+
+        Iterator  operator+(difference_type n) const { return Iterator(ptr_ + n); }
+        Iterator  operator-(difference_type n) const { return Iterator(ptr_ - n); }
+        difference_type operator-(const Iterator& o) const { return ptr_ - o.ptr_; }
+        Iterator& operator+=(difference_type n) { ptr_ += n; return *this; }
+        Iterator& operator-=(difference_type n) { ptr_ -= n; return *this; }
+        reference operator[](difference_type n) const { return ptr_[n]; }
+
+        bool operator==(const Iterator& o) const { return ptr_ == o.ptr_; }
+        bool operator!=(const Iterator& o) const { return ptr_ != o.ptr_; }
+        bool operator< (const Iterator& o) const { return ptr_ <  o.ptr_; }
+        bool operator> (const Iterator& o) const { return ptr_ >  o.ptr_; }
+        bool operator<=(const Iterator& o) const { return ptr_ <= o.ptr_; }
+        bool operator>=(const Iterator& o) const { return ptr_ >= o.ptr_; }
+
+    private:
+        pointer ptr_;
+    };
+
+    Vector() : data_(nullptr), size_(0), capacity_(0) {}
+    ~Vector() { delete[] data_; }
+
+    void push_back(const T& val) {
+        if (size_ == capacity_) reserve(capacity_ == 0 ? 1 : capacity_ * 2);
+        data_[size_++] = val;
+    }
+
+    T&          operator[](std::size_t i) { return data_[i]; }
+    std::size_t size()     const { return size_; }
+    std::size_t capacity() const { return capacity_; }
+
+    Iterator begin() { return Iterator(data_); }
+    Iterator end()   { return Iterator(data_ + size_); }
+
+private:
+    void reserve(std::size_t new_cap) {
+        T* tmp = new T[new_cap];
+        for (std::size_t i = 0; i < size_; ++i) tmp[i] = data_[i];
+        delete[] data_;
+        data_ = tmp; capacity_ = new_cap;
+    }
+
+    T* data_; std::size_t size_; std::size_t capacity_;
+};
+\end{lstlisting}
+
+Пять \texttt{type alias}-ов в \texttt{Iterator} --- контракт с
+\texttt{iterator\_traits}. Без них \texttt{std::sort} и
+\texttt{std::distance} не смогут узнать категорию итератора.
+
+% -------------------------------------------------------
+\section{Потоковые итераторы}
+
+\subsection{\texttt{std::istream\_iterator}}
+
+\begin{lstlisting}
+#include <iterator>
+#include <vector>
+
+int main() {
+    std::vector<int> v(
+        std::istream_iterator<int>(std::cin),
+        std::istream_iterator<int>()   // итератор-конец (EOF)
+    );
+}
+\end{lstlisting}
+
+Это \textbf{InputIterator} --- одноразовый: прочитанное назад не вернуть.
+\texttt{istream\_iterator<int>()} без аргументов --- итератор конца потока.
+
+\begin{lstlisting}
+std::istream_iterator<int> in(std::cin), eof;
+int sum = std::accumulate(in, eof, 0); // сумма всех чисел из stdin
+\end{lstlisting}
+
+\subsection{\texttt{std::ostream\_iterator}}
+
+\begin{lstlisting}
+std::vector<int> v = {1, 2, 3, 4, 5};
+
+std::copy(v.begin(), v.end(),
+          std::ostream_iterator<int>(std::cout, " "));
+// вывод: 1 2 3 4 5
+
+std::transform(v.begin(), v.end(),
+               std::ostream_iterator<int>(std::cout, "\n"),
+               [](int x) { return x * x; });
+\end{lstlisting}
+
+\texttt{ostream\_iterator} --- \textbf{OutputIterator}: присваивание
+\texttt{*it = val} вызывает \texttt{os << val << delim}.
+
+\subsection{Итераторы файловых потоков}
+
+\begin{lstlisting}
+#include <fstream>
+#include <iterator>
+#include <algorithm>
+
+int main() {
+    std::ifstream fin("input.txt");
+    std::ofstream fout("output.txt");
+
+    std::vector<int> v(std::istream_iterator<int>(fin),
+                       std::istream_iterator<int>());
+    std::sort(v.begin(), v.end());
+    std::copy(v.begin(), v.end(),
+              std::ostream_iterator<int>(fout, "\n"));
+}
+\end{lstlisting}
+
+Алгоритмы не знают, откуда данные читаются и куда пишутся --- они
+работают с абстракцией итератора. В этом и есть смысл всей иерархии.
+
+% -------------------------------------------------------
+\newpage
+\section{Аллокаторы и управление памятью}
+
+\subsection{Зачем аллокатор нужен контейнеру}
+
+У каждого контейнера есть шаблонный параметр аллокатора:
+
+\begin{lstlisting}
+std::list<int>    // = std::list<int, std::allocator<int>>
+std::vector<int>  // = std::vector<int, std::allocator<int>>
+\end{lstlisting}
+
+Аллокатор --- это \textbf{промежуточный класс между контейнером и
+оператором \texttt{new}}. Стек вызовов:
+
+\begin{center}
+\texttt{Container} $\to$ \texttt{Allocator} $\to$
+\texttt{operator new} $\to$ \texttt{malloc} $\to$ \texttt{OS}
+\end{center}
+
+\subsection{Устройство стандартного аллокатора}
+
+У аллокатора четыре метода:
+
+\begin{lstlisting}
+template<typename T>
+struct allocator {
+    using value_type = T;
+
+    T* allocate(std::size_t n) {
+        if (n == 0) return nullptr;
+        return static_cast<T*>(::operator new(n * sizeof(T)));
+    }
+
+    void deallocate(T* p, std::size_t) {
+        ::operator delete(p);
+    }
+
+    template<typename... Args>
+    void construct(T* p, Args&&... args) {
+        ::new (static_cast<void*>(p)) T(std::forward<Args>(args)...);
+    }
+
+    void destroy(T* p) {
+        p->~T();
+    }
+};
+\end{lstlisting}
+
+\begin{itemize}
+    \item \texttt{allocate} --- выделяет сырую память, конструкторы не вызываются.
+    \item \texttt{deallocate} --- освобождает память, деструкторы не вызываются.
+    \item \texttt{construct} --- вызывает конструктор по адресу (placement new).
+    \item \texttt{destroy} --- явно вызывает деструктор, память не освобождает.
+\end{itemize}
+
+\subsection{Проблема: \texttt{list} аллоцирует не \texttt{T}}
+
+\texttt{std::list<int>} хранит не просто \texttt{int}, а узлы:
+
+\begin{lstlisting}
+template<typename T>
+struct ListNode { T value; ListNode* prev; ListNode* next; };
+\end{lstlisting}
+
+Но аллокатор шаблонизирован по \texttt{T = int}. Решение комитета ---
+\textbf{rebind}: вложенный шаблон в аллокаторе, который перепривязывает
+его к другому типу:
+
+\begin{lstlisting}
+template<typename T>
+struct allocator {
+    template<typename U>
+    struct rebind { using other = allocator<U>; };
+};
+
+// list внутри делает:
+using NodeAlloc = typename Alloc::template rebind<ListNode<T>>::other;
+NodeAlloc node_alloc_;  // аллокатор для узлов, а не для T
+\end{lstlisting}
+
+\subsection{\texttt{allocator\_traits}}
+
+\texttt{std::allocator\_traits<Alloc>} --- адаптер с единым интерфейсом
+к любому аллокатору и разумными дефолтами для отсутствующих методов.
+
+\begin{lstlisting}
+template<typename Alloc>
+struct allocator_traits {
+    using value_type      = typename Alloc::value_type;
+    using pointer         = value_type*;
+    using size_type       = std::size_t;
+    using difference_type = std::ptrdiff_t;
+
+    template<typename U>
+    using rebind_alloc = typename Alloc::template rebind<U>::other;
+
+    static pointer allocate(Alloc& a, size_type n)
+        { return a.allocate(n); }
+    static void deallocate(Alloc& a, pointer p, size_type n)
+        { a.deallocate(p, n); }
+
+    // если у Alloc нет construct -- placement new по умолчанию
+    template<typename T, typename... Args>
+    static void construct(Alloc&, T* p, Args&&... args)
+        { ::new (static_cast<void*>(p)) T(std::forward<Args>(args)...); }
+
+    // если у Alloc нет destroy -- явный деструктор по умолчанию
+    template<typename T>
+    static void destroy(Alloc&, T* p) { p->~T(); }
+
+    // политики распространения аллокатора
+    using propagate_on_container_copy_assignment = std::false_type;
+    using propagate_on_container_move_assignment = std::false_type;
+    using propagate_on_container_swap            = std::false_type;
+};
+\end{lstlisting}
+
+\textbf{Главная идея}: контейнер должен работать с аллокатором
+\textit{только через \texttt{allocator\_traits}}. Тогда кастомный
+аллокатор может не реализовывать \texttt{construct}/\texttt{destroy}
+и всё равно работать.
+
+\subsubsection{Политики распространения аллокатора}
+
+\begin{center}
+\begin{tabular}{lp{7.5cm}}
+\toprule
+\textbf{Флаг} & \textbf{Что означает} \\
+\midrule
+\texttt{propagate\_on\_container\_copy\_assignment}
+    & Копировать аллокатор при \texttt{operator=} копирования? \\
+\addlinespace
+\texttt{propagate\_on\_container\_move\_assignment}
+    & Копировать аллокатор при \texttt{operator=} перемещения? \\
+\addlinespace
+\texttt{propagate\_on\_container\_swap}
+    & Менять аллокаторы местами при \texttt{swap}? \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+По умолчанию все три --- \texttt{false\_type}. Это важно для stateful
+аллокаторов: если два вектора используют разные арены, при свопе нужно
+либо перетащить элементы, либо поменять аллокаторы.
+
+\subsection{Allocator-aware контейнер}
+
+\begin{lstlisting}
+template<typename T, typename Alloc = std::allocator<T>>
+class vector {
+    using AllocTraits = std::allocator_traits<Alloc>;
+
+    Alloc  alloc_;
+    T*     arr_;
+    size_t sz_;
+    size_t cap_;
+
+public:
+    explicit vector(const Alloc& a = Alloc())
+        : alloc_(a), arr_(nullptr), sz_(0), cap_(0) {}
+
+    void push_back(const T& val) {
+        if (sz_ == cap_) reserve(cap_ ? cap_ * 2 : 1);
+        AllocTraits::construct(alloc_, arr_ + sz_, val);
+        ++sz_;
+    }
+
+    ~vector() {
+        for (size_t i = 0; i < sz_; ++i)
+            AllocTraits::destroy(alloc_, arr_ + i);
+        AllocTraits::deallocate(alloc_, arr_, cap_);
+    }
+
+private:
+    void reserve(size_t newcap) {
+        T* newarr = AllocTraits::allocate(alloc_, newcap);
+        size_t i = 0;
+        try {
+            for (; i < sz_; ++i)
+                AllocTraits::construct(alloc_, newarr + i, arr_[i]);
+        } catch (...) {
+            for (size_t k = 0; k < i; ++k)
+                AllocTraits::destroy(alloc_, newarr + k);
+            AllocTraits::deallocate(alloc_, newarr, newcap);
+            throw;
+        }
+        for (size_t k = 0; k < sz_; ++k)
+            AllocTraits::destroy(alloc_, arr_ + k);
+        AllocTraits::deallocate(alloc_, arr_, cap_);
+        arr_ = newarr; cap_ = newcap;
+    }
+};
+\end{lstlisting}
+
+Stateless аллокатор (как \texttt{std::allocator}) не занимает места
+благодаря \textbf{EBO} (Empty Base Optimization).
+
+\subsection{Перегрузка \texttt{operator new} и \texttt{operator delete}}
+
+\subsubsection{Глобальная перегрузка}
+
+\begin{lstlisting}
+void* operator new(std::size_t size) {
+    void* ptr = std::malloc(size);
+    if (!ptr) throw std::bad_alloc{};
+    return ptr;
+}
+void operator delete(void* ptr) noexcept { std::free(ptr); }
+
+// C++14: sized delete
+void operator delete(void* ptr, std::size_t size) noexcept { std::free(ptr); }
+\end{lstlisting}
+
+Затрагивает весь процесс. Используется для профилировщиков памяти и
+детекторов утечек.
+
+\subsubsection{Классовая перегрузка}
+
+\begin{lstlisting}
+struct Node {
+    int value; Node* next;
+
+    void* operator new(std::size_t size) {
+        return ::operator new(size); // делегируем глобальному
+    }
+    void operator delete(void* ptr) noexcept {
+        ::operator delete(ptr);
+    }
+};
+\end{lstlisting}
+
+При \texttt{new Node} компилятор сначала ищет \texttt{operator new}
+в классе, и только если не нашёл --- берёт глобальный.
+
+\subsubsection{Когда использовать что}
+
+\begin{center}
+\begin{tabular}{lp{7.5cm}}
+\toprule
+\textbf{Инструмент} & \textbf{Когда применять} \\
+\midrule
+Кастомный аллокатор
+    & Своя стратегия памяти для конкретного контейнера \\
+\addlinespace
+Классовая перегрузка \texttt{new/delete}
+    & Свой пул для конкретного класса (например, узлы дерева) \\
+\addlinespace
+Глобальная перегрузка \texttt{new/delete}
+    & Профилирование, детектирование утечек для всей программы \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\newpage
+\section{Многопоточность в C++}
+
+\begin{center}
+\fbox{\parbox{0.9\textwidth}{
+\textbf{Лирическое отступление.} Данный раздел \textbf{не относится} к текущему
+курсу и приводится исключительно в ознакомительных целях. Многопоточность будет
+подробно рассмотрена в последующих курсах.
+}}
+\end{center}
+
+\medskip
+
+% -------------------------------------------------------
+\subsection{Определение потока исполнения}
+
+\subsubsection{Что такое поток?}
+
+\textbf{Поток исполнения (thread of execution)} --- это единственная последовательная
+цепочка команд, выполняемых процессором. Представьте это как <<линию чтения>> в книге:
+один палец ведёт по одной строке. Если у вас два пальца --- вы читаете два куска книги
+одновременно (два потока).
+
+Программа считается завершённой \textbf{только тогда}, когда завершились \textbf{все}
+её потоки. Даже если \texttt{main()} уже отработал, отсоединённые потоки могут ещё работать.
+
+\subsubsection{Аналогия}
+
+Представьте кухню ресторана:
+\begin{itemize}
+    \item \textbf{Однопоточная программа} --- один повар делает всё по очереди:
+          режет овощи, варит суп, жарит мясо. Пока суп варится, повар просто ждёт.
+    \item \textbf{Многопоточная программа} --- несколько поваров работают параллельно.
+          Один варит суп, другой жарит мясо, третий режет салат.
+\end{itemize}
+
+\subsubsection{Логическая многопоточность vs Аппаратный параллелизм}
+
+Это \textbf{не одно и то же}:
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+\textbf{Понятие} & \textbf{Суть} & \textbf{Пример} \\
+\midrule
+Логическая многопоточность
+    & ОС быстро переключается между потоками на одном ядре, создавая \textit{иллюзию} параллельности
+    & 1 ядро, 4 потока --- ОС по очереди даёт каждому \textasciitilde10 мс \\
+\addlinespace
+Аппаратный параллелизм
+    & Потоки реально выполняются одновременно на разных ядрах
+    & 4 ядра $\times$ 1 поток --- каждый работает физически одновременно \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\medskip
+Многопоточность появилась \textbf{раньше} многоядерных процессоров. Зачем?
+Чтобы решить проблему \textbf{блокирующего ввода-вывода}. Классический пример:
+в ранних ОС форматирование дискеты <<вешало>> всю систему, потому что процессор
+просто ждал завершения I/O-операции. С появлением потоков ОС могла переключиться
+на другую задачу, пока диск форматируется.
+
+\subsubsection{Типы многозадачности}
+
+\textbf{Кооперативная многозадачность} --- поток \textit{сам} решает, когда
+отдать управление другим. Если поток <<зажадничал>> и не отдаёт CPU ---
+все остальные замирают.
+
+\begin{lstlisting}[numbers=none]
+Поток A: работаю... работаю... ладно, передаю управление -> yield()
+Поток B: о, моя очередь! работаю... yield()
+Поток A: снова я!
+\end{lstlisting}
+
+Пример в современном C++ --- \textbf{корутины} (\texttt{co\_await},
+\texttt{co\_yield} в C++20).
+
+\medskip
+\textbf{Вытесняющая многозадачность} --- ОС \textit{сама} прерывает потоки
+по таймеру (обычно каждые \textasciitilde10 мс). Поток не может <<зависнуть>>
+и заблокировать всю систему.
+
+\begin{lstlisting}[numbers=none]
+Поток A: работаю... работ--
+[ОС]: Время вышло! Переключаю на B.
+Поток B: работаю...
+\end{lstlisting}
+
+Это стандарт для всех современных ОС (Windows, Linux, macOS).
+
+% -------------------------------------------------------
+\subsection{Работа с потоками в C++}
+
+\subsubsection{Создание потока}
+
+Потоки создаются через \texttt{std::thread} (доступен с C++11). Важная деталь:
+\textbf{поток запускается немедленно} в момент создания объекта --- нет отдельного
+метода \texttt{start()}.
+
+\begin{lstlisting}
+#include <iostream>
+#include <thread>
+
+void say_hello() {
+    std::cout << "Привет из потока!\n";
+}
+
+int main() {
+    std::thread t(say_hello);  // Поток УЖЕ работает!
+    t.join();                  // Ждём завершения
+    return 0;
+}
+\end{lstlisting}
+
+\subsubsection{Передача аргументов в поток}
+
+\begin{lstlisting}
+void print_sum(int a, int b) {
+    std::cout << a + b << "\n";
+}
+
+int main() {
+    std::thread t(print_sum, 3, 7);  // Аргументы передаются после функции
+    t.join();
+}
+\end{lstlisting}
+
+\textbf{Внимание:} аргументы \textbf{копируются} в поток.
+Если нужна ссылка, используйте \texttt{std::ref()}:
+
+\begin{lstlisting}
+void increment(int& x) { x++; }
+
+int main() {
+    int value = 0;
+    std::thread t(increment, std::ref(value));  // Передаём ссылку
+    t.join();
+    std::cout << value;  // 1
+}
+\end{lstlisting}
+
+\subsubsection{Использование лямбд}
+
+\begin{lstlisting}
+int main() {
+    int data = 42;
+    std::thread t([&data]() {
+        data *= 2;
+        std::cout << "В потоке: " << data << "\n";
+    });
+    t.join();
+    std::cout << "В main: " << data << "\n";  // 84
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{join()} vs \texttt{detach()}}
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+\textbf{Метод} & \textbf{Что делает} & \textbf{Когда использовать} \\
+\midrule
+\texttt{join()}
+    & Блокирует текущий поток до завершения вызванного
+    & Когда нужен результат работы потока \\
+\addlinespace
+\texttt{detach()}
+    & Отсоединяет поток, он живёт самостоятельно
+    & Фоновые задачи (логирование, мониторинг) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}
+// Пример join() -- ждём результат
+std::thread t(heavy_computation);
+// ... тут main делает свои дела ...
+t.join();  // Теперь точно результат готов
+
+// Пример detach() -- fire and forget
+std::thread logger(write_logs);
+logger.detach();  // Пусть пишет логи в фоне
+\end{lstlisting}
+
+\subsubsection{Опасность: забыть \texttt{join}/\texttt{detach}}
+
+Если объект \texttt{std::thread} уничтожается без вызова \texttt{join()} или
+\texttt{detach()}, программа \textbf{аварийно завершается} через
+\texttt{std::terminate()}:
+
+\begin{lstlisting}
+void dangerous() {
+    std::thread t(some_work);
+    // Упс! Функция завершилась, t уничтожается
+    // без join/detach -> std::terminate()!
+}
+\end{lstlisting}
+
+\textbf{Безопасный паттерн} --- RAII-обёртка (или \texttt{std::jthread} из C++20,
+который сам делает \texttt{join} в деструкторе):
+
+\begin{lstlisting}
+// C++20
+void safe() {
+    std::jthread t(some_work);
+    // Деструктор jthread сам вызовет join()
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Область памяти и состояние гонки (Data Race)}
+
+\subsubsection{Что такое Memory Location?}
+
+\textbf{Memory Location} (область памяти) по стандарту --- это:
+\begin{itemize}
+    \item Объект \textbf{скалярного типа} (\texttt{int}, \texttt{char},
+          \texttt{float}, указатель и~т.\,д.)
+    \item Или \textbf{максимальная последовательность битовых полей ненулевой длины}
+\end{itemize}
+
+Важный нюанс: два соседних поля структуры --- это \textbf{разные} области памяти,
+к ним можно обращаться параллельно без гонки. Но соседние битовые поля --- это
+\textbf{одна} область памяти!
+
+\begin{lstlisting}
+struct S {
+    int x;      // Отдельная memory location
+    int y;      // Отдельная memory location -- можно менять параллельно с x
+};
+
+struct Bits {
+    unsigned a : 4;  // a и b -- ОДНА memory location!
+    unsigned b : 4;  // Параллельное изменение a и b = Data Race
+    unsigned   : 0;  // Разделитель
+    unsigned c : 4;  // c -- отдельная memory location
+};
+\end{lstlisting}
+
+\subsubsection{Что такое Data Race?}
+
+\textbf{Data Race (гонка данных)} --- это ситуация, когда:
+
+\begin{enumerate}
+    \item Два потока обращаются к \textbf{одной области памяти}
+    \item \textbf{Хотя бы один} из них \textbf{записывает}
+    \item Между ними \textbf{нет синхронизации} (нет happens-before)
+    \item Хотя бы одно действие \textbf{не атомарное}
+\end{enumerate}
+
+\textbf{Data Race = Undefined Behavior (UB).} Это не просто <<неправильный результат>>.
+Компилятор имеет право на \textit{что угодно}: удалить код, выдать мусор,
+отформатировать диск (теоретически).
+
+\subsubsection{Наглядный пример гонки}
+
+\begin{lstlisting}
+#include <thread>
+
+int counter = 0;  // Общая переменная
+
+void increment_1000() {
+    for (int i = 0; i < 1000; ++i) {
+        counter++;  // DATA RACE!
+    }
+}
+
+int main() {
+    std::thread t1(increment_1000);
+    std::thread t2(increment_1000);
+    t1.join();
+    t2.join();
+
+    // Ожидаем 2000, но результат непредсказуем!
+    // Может быть 1500, 1837, 2000, или что угодно
+    std::cout << counter << "\n";
+}
+\end{lstlisting}
+
+\textbf{Почему не 2000?} Операция \texttt{counter++} не атомарна.
+На уровне процессора это три шага:
+
+\begin{lstlisting}[numbers=none]
+1. Прочитать counter из памяти -> регистр    (LOAD)
+2. Увеличить значение в регистре на 1       (ADD)
+3. Записать результат обратно в память       (STORE)
+\end{lstlisting}
+
+Если два потока выполняют это одновременно:
+
+\begin{lstlisting}[numbers=none]
+Поток 1: LOAD counter (=0) -> регистр = 0
+Поток 2: LOAD counter (=0) -> регистр = 0
+Поток 1: ADD -> регистр = 1
+Поток 2: ADD -> регистр = 1
+Поток 1: STORE -> counter = 1
+Поток 2: STORE -> counter = 1   <- Инкремент потерян!
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Распространённые ошибки и заблуждения}
+
+\subsubsection{Ошибка №1: \texttt{volatile} <<чинит>> гонки}
+
+\textbf{Нет!} \texttt{volatile} --- это указание компилятору:
+\begin{itemize}
+    \item Не оптимизировать чтение/запись этой переменной
+    \item Каждый раз читать значение из памяти, а не из регистра
+\end{itemize}
+
+Но \texttt{volatile} \textbf{НЕ обеспечивает}:
+\begin{itemize}
+    \item Атомарность операций
+    \item Барьеры памяти (memory barriers)
+    \item Когерентность кэшей между ядрами
+\end{itemize}
+
+\begin{lstlisting}
+volatile int counter = 0;  // НЕ решает проблему!
+
+// counter++ по-прежнему = LOAD + ADD + STORE
+// volatile лишь гарантирует, что компилятор не закэширует
+// значение в регистре, но гонка всё равно есть
+
+// Правильное решение:
+std::atomic<int> counter = 0;  // Атомарная переменная
+\end{lstlisting}
+
+\texttt{volatile} полезен для:
+\begin{itemize}
+    \item Регистров аппаратуры (MMIO)
+    \item Переменных, изменяемых обработчиками сигналов
+    \item Переменных, изменяемых через \texttt{setjmp}/\texttt{longjmp}
+\end{itemize}
+
+\subsubsection{Ошибка №2: Привязка к одному ядру решает гонки}
+
+Можно использовать системные вызовы для привязки потоков к одному ядру:
+
+\begin{lstlisting}
+// Linux-специфичный код
+cpu_set_t cpuset;
+CPU_ZERO(&cpuset);
+CPU_SET(0, &cpuset);  // Привязать к ядру 0
+sched_setaffinity(0, sizeof(cpuset), &cpuset);
+\end{lstlisting}
+
+Визуально симптомы гонки \textbf{могут исчезнуть} (потоки не работают
+\textit{физически} параллельно). Но по стандарту C++ это \textbf{всё равно UB},
+потому что:
+\begin{itemize}
+    \item Язык C++ <<не знает>> про ядра процессора
+    \item Стандарт определяет поведение абстрактной машины, а не конкретного железа
+    \item Компилятор может оптимизировать код, опираясь на правила стандарта
+\end{itemize}
+
+\subsubsection{Ошибка №3: \texttt{std::cout} безопасен для многопоточности}
+
+Стандарт \textbf{гарантирует}, что в \texttt{std::cout} не будет Data Race
+(внутренний буфер защищён). Но \textbf{порядок вывода} может перемешиваться:
+
+\begin{lstlisting}
+// Поток 1:
+std::cout << "Hello " << "from " << "thread 1\n";
+
+// Поток 2:
+std::cout << "Hello " << "from " << "thread 2\n";
+
+// Возможный вывод:
+// Hello Hello from from thread 1thread 2
+//
+// Каждая отдельная операция << атомарна,
+// но между ними другой поток может вклиниться
+\end{lstlisting}
+
+\textbf{Решение --- вывод одной строкой:}
+
+\begin{lstlisting}
+// Вариант 1: формируем строку заранее
+std::string msg = "Hello from thread 1\n";
+std::cout << msg;  // Один вызов << = один непрерывный вывод
+
+// Вариант 2: std::osyncstream (C++20)
+std::osyncstream(std::cout) << "Hello " << "from " << "thread 1\n";
+// Весь вывод буферизуется и отправляется атомарно
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Синхронизация: Мьютексы}
+
+\subsubsection{Что такое мьютекс?}
+
+\textbf{Мьютекс (mutex = mutual exclusion)} --- это объект синхронизации,
+который гарантирует, что только \textbf{один поток} в каждый момент времени
+выполняет защищённый участок кода (критическую секцию).
+
+Аналогия: туалетная кабинка с замком. Зашёл --- закрыл (\texttt{lock}).
+Вышел --- открыл (\texttt{unlock}). Если занято --- жди.
+
+\subsubsection{Базовый интерфейс}
+
+\begin{lstlisting}
+#include <mutex>
+
+std::mutex mtx;
+int counter = 0;
+
+void safe_increment() {
+    for (int i = 0; i < 1000; ++i) {
+        mtx.lock();       // Захватить мьютекс (или ждать)
+        counter++;        // Критическая секция -- только один поток
+        mtx.unlock();     // Освободить мьютекс
+    }
+}
+
+int main() {
+    std::thread t1(safe_increment);
+    std::thread t2(safe_increment);
+    t1.join();
+    t2.join();
+    std::cout << counter << "\n";  // Всегда 2000!
+}
+\end{lstlisting}
+
+\subsubsection{Методы мьютекса}
+
+\begin{center}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{Метод} & \textbf{Поведение} \\
+\midrule
+\texttt{lock()}
+    & Захватить. Если занят --- \textbf{заблокировать} текущий поток до освобождения \\
+\addlinespace
+\texttt{unlock()}
+    & Освободить мьютекс \\
+\addlinespace
+\texttt{try\_lock()}
+    & Попробовать захватить. Если занят --- \textbf{не ждать}, вернуть \texttt{false} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}
+if (mtx.try_lock()) {
+    // Захватили! Делаем работу...
+    mtx.unlock();
+} else {
+    // Мьютекс занят, делаем что-то другое
+}
+\end{lstlisting}
+
+\subsubsection{Правила и UB при работе с мьютексами}
+
+\textbf{UB №1: Повторный захват в том же потоке (рекурсивный lock)}
+
+\begin{lstlisting}
+std::mutex mtx;
+
+void foo() {
+    mtx.lock();
+    // ... делаем что-то ...
+    mtx.lock();   // UB! Этот поток уже владеет мьютексом!
+                  // Deadlock или неопределённое поведение
+    mtx.unlock();
+    mtx.unlock();
+}
+\end{lstlisting}
+
+Решение --- \texttt{std::recursive\_mutex} (если рекурсия действительно нужна):
+
+\begin{lstlisting}
+std::recursive_mutex rmtx;
+
+void foo() {
+    rmtx.lock();
+    rmtx.lock();   // Рекурсивный мьютекс допускает это
+    rmtx.unlock();
+    rmtx.unlock(); // Нужно столько же unlock, сколько lock
+}
+\end{lstlisting}
+
+\textbf{UB №2: Разблокировка чужого мьютекса}
+
+\begin{lstlisting}
+std::mutex mtx;
+
+// Поток 1:
+mtx.lock();
+// работает...
+
+// Поток 2:
+mtx.unlock();  // UB! Поток 2 не захватывал этот мьютекс!
+\end{lstlisting}
+
+\textbf{Почему нет метода \texttt{is\_locked()}?}
+
+Потому что он бесполезен: к моменту, когда вы получите ответ, состояние уже
+могло измениться:
+
+\begin{lstlisting}
+// Бессмысленный гипотетический код:
+if (!mtx.is_locked()) {    // В этот момент мьютекс свободен
+    mtx.lock();             // Но здесь другой поток мог его захватить!
+}
+// Именно поэтому существует try_lock() -- атомарная проверка+захват
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{RAII в многопоточности}
+
+\subsubsection{Проблема голых \texttt{lock}/\texttt{unlock}}
+
+\begin{lstlisting}
+void dangerous_function() {
+    mtx.lock();
+
+    do_work();          // Что если тут исключение?
+
+    if (error) {
+        return;         // Забыли unlock! Мьютекс навсегда заблокирован!
+    }
+
+    mtx.unlock();       // До сюда можем не дойти
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{std::lock\_guard} --- простая RAII-обёртка}
+
+\textbf{Принцип RAII:} конструктор захватывает ресурс, деструктор освобождает.
+Гарантирует освобождение при \textbf{любом} выходе из области видимости
+(\texttt{return}, исключение, \texttt{break}\ldots).
+
+\begin{lstlisting}
+void safe_function() {
+    std::lock_guard<std::mutex> lock(mtx);  // lock() в конструкторе
+
+    do_work();          // Исключение? Не страшно!
+
+    if (error) {
+        return;         // Деструктор lock_guard вызовет unlock()
+    }
+
+    // Деструктор lock_guard вызовет unlock()
+}
+\end{lstlisting}
+
+С C++17 можно не указывать тип (CTAD):
+
+\begin{lstlisting}
+std::lock_guard lock(mtx);  // Компилятор выведет тип сам
+\end{lstlisting}
+
+\subsubsection{\texttt{std::unique\_lock} --- гибкая обёртка}
+
+В отличие от \texttt{lock\_guard}, позволяет:
+\begin{itemize}
+    \item Откладывать захват (\texttt{std::defer\_lock})
+    \item Досрочно освобождать (\texttt{unlock()})
+    \item Перемещать между областями видимости
+\end{itemize}
+
+\begin{lstlisting}
+void flexible_function() {
+    std::unique_lock<std::mutex> lock(mtx, std::defer_lock);
+    // Мьютекс ещё НЕ захвачен
+
+    prepare_data();
+
+    lock.lock();          // Захватываем, когда нужно
+    modify_shared_data();
+    lock.unlock();        // Освобождаем досрочно
+
+    do_unrelated_work();  // Работаем без мьютекса
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{std::scoped\_lock} (C++17) --- захват нескольких мьютексов}
+
+Главное преимущество: захватывает \textbf{несколько} мьютексов \textbf{без риска дедлока}:
+
+\begin{lstlisting}
+std::mutex mtx1, mtx2;
+
+void transfer(Account& from, Account& to, int amount) {
+    std::scoped_lock lock(mtx1, mtx2);  // Оба мьютекса захвачены безопасно
+    from.balance -= amount;
+    to.balance += amount;
+    // Деструктор освободит оба мьютекса
+}
+\end{lstlisting}
+
+\subsubsection{Сравнение RAII-обёрток}
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Свойство} & \texttt{lock\_guard} & \texttt{unique\_lock} & \texttt{scoped\_lock} \\
+\midrule
+Несколько мьютексов   & нет & нет & да  \\
+Отложенный захват     & нет & да  & нет \\
+Досрочное освобождение & нет & да  & нет \\
+Перемещение           & нет & да  & нет \\
+Стандарт              & C++11 & C++11 & C++17 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\subsection{Проектирование потокобезопасных объектов}
+
+\subsubsection{Уровни потокобезопасности}
+
+\textbf{Уровень <<Нейтральный>>} --- объект сам по себе не защищён, но безопасен
+при внешней синхронизации.
+
+\begin{lstlisting}
+int x = 0;  // Нейтральный тип
+
+// Безопасно, если обернуть в мьютекс:
+std::mutex mtx;
+{
+    std::lock_guard lock(mtx);
+    x++;
+}
+\end{lstlisting}
+
+\textbf{Уровень <<Ниже нейтрального>>} --- указатели. Даже если синхронизировать
+сам указатель, данные по нему могут быть не защищены:
+
+\begin{lstlisting}
+std::mutex mtx;
+int* ptr = new int(42);
+
+// Поток 1:
+{
+    std::lock_guard lock(mtx);
+    ptr = new int(100);       // Защитили ptr
+}
+
+// Поток 2:
+int local = *ptr;             // А данные по указателю -- не защищены!
+                              // ptr мог уже указывать на удалённую память
+\end{lstlisting}
+
+\textbf{Уровень <<Потокобезопасный>>} --- все операции внутренне защищены.
+Пример: \texttt{std::atomic<int>}.
+
+\begin{lstlisting}
+std::atomic<int> counter = 0;
+
+// Поток 1:
+counter++;  // Атомарно и безопасно
+
+// Поток 2:
+counter++;  // Атомарно и безопасно
+\end{lstlisting}
+
+\subsubsection{API Race --- коварная ловушка}
+
+Это ситуация, когда \textbf{каждый отдельный метод} защищён мьютексом
+(Data Race нет!), но \textbf{последовательность вызовов} создаёт логическую ошибку.
+
+\textbf{Классический пример: потокобезопасный стек}
+
+\begin{lstlisting}
+// Допустим, у нас есть "потокобезопасный" стек:
+class ThreadSafeStack {
+    std::mutex mtx;
+    std::stack<int> data;
+public:
+    bool empty() {
+        std::lock_guard lock(mtx);
+        return data.empty();
+    }
+    int top() {
+        std::lock_guard lock(mtx);
+        return data.top();
+    }
+    void pop() {
+        std::lock_guard lock(mtx);
+        data.pop();
+    }
+};
+\end{lstlisting}
+
+Каждый метод по отдельности безопасен. Но посмотрите:
+
+\begin{lstlisting}
+ThreadSafeStack stack;
+
+// Поток 1:
+if (!stack.empty()) {      // 1. Проверили -- не пуст
+                           // Между empty() и top() поток 2 вызвал pop()!
+    int val = stack.top(); // 2. Стек уже пуст -> UB!
+    stack.pop();
+}
+
+// Поток 2 (выполняется между шагами 1 и 2 потока 1):
+if (!stack.empty()) {
+    stack.pop();           // Забрал последний элемент
+}
+\end{lstlisting}
+
+\textbf{Решение: объединение операций}
+
+\begin{lstlisting}
+class SafeStack {
+    std::mutex mtx;
+    std::stack<int> data;
+public:
+    // Одна атомарная операция вместо трёх
+    std::optional<int> try_pop() {
+        std::lock_guard lock(mtx);
+        if (data.empty()) {
+            return std::nullopt;  // Пусто -- вернули "ничего"
+        }
+        int val = data.top();
+        data.pop();
+        return val;               // Проверка + чтение + удаление = одна операция
+    }
+
+    void push(int val) {
+        std::lock_guard lock(mtx);
+        data.push(val);
+    }
+};
+
+// Использование:
+if (auto val = stack.try_pop()) {
+    std::cout << "Получили: " << *val << "\n";
+} else {
+    std::cout << "Стек пуст\n";
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Дедлоки (Deadlocks)}
+
+\subsubsection{Что такое дедлок?}
+
+\textbf{Дедлок (взаимная блокировка)} --- ситуация, когда два (или более) потока
+бесконечно ждут друг друга, потому что каждый держит ресурс, нужный другому.
+
+\subsubsection{Классический пример: перевод денег}
+
+\begin{lstlisting}
+std::mutex mtx_A, mtx_B;  // Мьютексы для счетов A и B
+
+// Поток 1: перевод A -> B
+void transfer_A_to_B() {
+    mtx_A.lock();           // 1. Захватил A
+    // ... тут переключение контекста ...
+    mtx_B.lock();           // 3. Ждёт B... но B занят потоком 2 -> ДЕДЛОК
+    // перевод...
+    mtx_B.unlock();
+    mtx_A.unlock();
+}
+
+// Поток 2: перевод B -> A
+void transfer_B_to_A() {
+    mtx_B.lock();           // 2. Захватил B
+    // ... тут переключение контекста ...
+    mtx_A.lock();           // 4. Ждёт A... но A занят потоком 1 -> ДЕДЛОК
+    // перевод...
+    mtx_A.unlock();
+    mtx_B.unlock();
+}
+\end{lstlisting}
+
+Визуально:
+
+\begin{lstlisting}[numbers=none]
+Поток 1: держит [A], хочет [B] ------+
+                                      +-- Оба ждут вечно!
+Поток 2: держит [B], хочет [A] ------+
+\end{lstlisting}
+
+\subsubsection{Задача об обедающих философах}
+
+5 философов сидят за круглым столом. Между каждыми двумя лежит одна вилка.
+Чтобы есть, нужны две вилки. Если каждый одновременно возьмёт левую вилку ---
+все будут ждать правую вечно = дедлок.
+
+\subsubsection{Решения в C++}
+
+\textbf{Решение 1: \texttt{std::lock()} --- алгоритм безопасного захвата}
+
+\begin{lstlisting}
+std::mutex mtx_A, mtx_B;
+
+void safe_transfer() {
+    std::lock(mtx_A, mtx_B);  // Захватывает оба без дедлока!
+    // std::lock использует внутренний алгоритм:
+    // try_lock на одном -> try_lock на другом -> если не получилось,
+    // отпустить всё и попробовать заново
+
+    // Оборачиваем в lock_guard с adopt_lock (мьютексы уже захвачены)
+    std::lock_guard lockA(mtx_A, std::adopt_lock);
+    std::lock_guard lockB(mtx_B, std::adopt_lock);
+
+    // Делаем перевод...
+    // Деструкторы lock_guard освободят мьютексы
+}
+\end{lstlisting}
+
+\textbf{Решение 2: \texttt{std::scoped\_lock} (C++17) --- всё в одну строку}
+
+\begin{lstlisting}
+void safe_transfer_modern() {
+    std::scoped_lock lock(mtx_A, mtx_B);  // Всё! Безопасно и RAII
+    // Делаем перевод...
+}
+\end{lstlisting}
+
+\subsubsection{4 необходимых условия дедлока (условия Коффмана)}
+
+Дедлок возможен \textbf{только} если выполнены \textbf{все четыре} условия одновременно:
+
+\begin{enumerate}
+    \item \textbf{Взаимное исключение} --- ресурс может быть захвачен только одним потоком
+    \item \textbf{Удержание и ожидание} --- поток держит один ресурс и ждёт другой
+    \item \textbf{Невытесняемость} --- ресурс нельзя отобрать у потока силой
+    \item \textbf{Циклическое ожидание} --- замкнутая цепочка потоков, каждый ждёт следующего
+\end{enumerate}
+
+Разрушение \textbf{любого} из условий предотвращает дедлок. \texttt{std::lock}
+разрушает условие №2 (захватывает всё или ничего).
+
+% -------------------------------------------------------
+\subsection{Итого: шпаргалка}
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Проблема} & \textbf{Решение} \\
+\midrule
+Забыл \texttt{join}/\texttt{detach}
+    & \texttt{std::jthread} (C++20) \\
+\addlinespace
+Data Race
+    & \texttt{std::mutex} + RAII-обёртки или \texttt{std::atomic} \\
+\addlinespace
+Забыл \texttt{unlock}
+    & \texttt{std::lock\_guard} / \texttt{std::scoped\_lock} \\
+\addlinespace
+API Race
+    & Объединение операций (\texttt{try\_pop} и~т.\,п.) \\
+\addlinespace
+Дедлок
+    & \texttt{std::scoped\_lock(mtx1, mtx2, ...)} \\
+\addlinespace
+\texttt{volatile} вместо \texttt{atomic}
+    & Заменить на \texttt{std::atomic<T>} \\
+\addlinespace
+Перемешанный вывод
+    & \texttt{std::osyncstream} (C++20) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\newpage
+\section{Приведение типов (касты) в C++}
+
+% -------------------------------------------------------
+\subsection{<<Запрещённые заклинания>> --- зачем нужны касты?}
+
+В C++ система типов --- это ваш главный защитник. Она ловит ошибки на этапе
+компиляции: нельзя случайно сложить строку с указателем или передать \texttt{float}
+туда, где ожидается \texttt{std::vector}. Но иногда программисту \textbf{нужно}
+сказать компилятору: <<Я знаю, что делаю --- преобразуй этот тип в другой>>.
+
+Для этого существуют \textbf{четыре заклинания} (каста), каждое со своей силой
+и опасностью. Лектор не зря называет их <<запрещёнными>> --- неправильное
+использование ведёт к Undefined Behavior.
+
+\subsubsection{Почему не один каст, а четыре?}
+
+В языке C был всего один способ: \texttt{(тип)выражение}. Он делал \textit{всё
+подряд} --- и безопасные, и опасные преобразования --- и программист не мог отличить
+одно от другого. C++ разделил эту грубую силу на четыре точных инструмента, чтобы:
+
+\begin{itemize}
+    \item Код \textbf{явно показывал намерение} программиста
+    \item Опасные операции \textbf{бросались в глаза} при чтении кода
+    \item Можно было \textbf{искать} конкретные касты grep'ом (попробуйте найти
+          \texttt{(int)} в миллионе строк --- удачи)
+\end{itemize}
+
+% -------------------------------------------------------
+\subsection{C-style cast --- <<Грубая сила>>}
+
+\subsubsection{Синтаксис}
+
+\begin{lstlisting}
+double pi = 3.14159;
+int truncated = (int)pi;       // C-style cast
+int also_works = int(pi);      // Функциональный стиль (то же самое)
+\end{lstlisting}
+
+\subsubsection{Как это работает внутри?}
+
+C-style cast --- это \textbf{не отдельная операция}. Компилятор перебирает касты
+в строгом порядке и применяет \textbf{первый подходящий}:
+
+\begin{enumerate}
+    \item \texttt{const\_cast} --- попробовать снять/добавить \texttt{const}
+    \item \texttt{static\_cast} --- попробовать стандартное преобразование
+    \item \texttt{static\_cast} + \texttt{const\_cast} --- комбинация
+    \item \texttt{reinterpret\_cast} --- попробовать переинтерпретировать байты
+    \item \texttt{reinterpret\_cast} + \texttt{const\_cast} --- самая опасная комбинация
+\end{enumerate}
+
+\subsubsection{Почему это плохо?}
+
+\begin{lstlisting}
+class Base { virtual ~Base() = default; };
+class Derived : public Base { public: int x = 42; };
+
+void example() {
+    const Base* base_ptr = new Derived();
+
+    // C-style cast: что именно здесь происходит?
+    Derived* d = (Derived*)base_ptr;
+    // Ответ: reinterpret_cast + const_cast (снял const И переинтерпретировал)
+    // Вы это поняли, просто глядя на код? Вряд ли.
+
+    // Явный C++ каст -- намерение прозрачно:
+    const Derived* d2 = static_cast<const Derived*>(base_ptr);  // const сохранён
+}
+\end{lstlisting}
+
+\subsubsection{Главная опасность}
+
+C-style cast \textbf{никогда не выдаёт ошибку компиляции} для указателей. Он всегда
+найдёт способ --- пусть даже через \texttt{reinterpret\_cast}:
+
+\begin{lstlisting}
+std::string str = "hello";
+int* p = (int*)&str;   // Компилируется! Но это полная чушь.
+                        // reinterpret_cast<int*>(&str) -- хотя бы видно, что опасно
+
+// С C++ кастами:
+// int* p = static_cast<int*>(&str);         // Ошибка компиляции! Несовместимы.
+// int* p = reinterpret_cast<int*>(&str);    // Компилируется, но ЯВНО опасно
+\end{lstlisting}
+
+\textbf{Правило: в C++ коде C-style cast использовать нельзя. Точка.}
+
+% -------------------------------------------------------
+\subsection{\texttt{static\_cast} --- <<Безопасное преобразование>>}
+
+\subsubsection{Суть}
+
+\texttt{static\_cast} создаёт \textbf{новый объект} другого типа, используя
+определённые правила преобразования. Это самый частый и самый безопасный каст.
+
+Ключевое слово: \textbf{создаёт новый объект}. Старый остаётся нетронутым.
+
+\textbf{Если вы не знаете, какой каст нужен --- скорее всего, нужен \texttt{static\_cast}.}
+
+\subsubsection{Сценарий 1: Числовые преобразования}
+
+\begin{lstlisting}
+double pi = 3.14159;
+int truncated = static_cast<int>(pi);  // 3 (дробная часть отброшена)
+
+int big = 1'000'000;
+short small = static_cast<short>(big);  // Возможна потеря данных (переполнение)
+
+// Без каста компилятор выдаст предупреждение:
+int x = 3.14;  // Warning: implicit conversion from 'double' to 'int'
+int y = static_cast<int>(3.14);  // Предупреждения нет -- вы явно сказали "я знаю"
+\end{lstlisting}
+
+\textbf{Как \texttt{static\_cast<int>(3.14)} работает на уровне процессора?}
+
+Это \textbf{не просто отбрасывание битов}. Числа \texttt{int} и \texttt{double}
+хранятся совершенно по-разному:
+
+\begin{lstlisting}[numbers=none]
+double 3.14 в памяти (IEEE 754):
+01000000 00001001 00011110 10111000 01010001 11101100 00000000 00000000
+|знак   | экспонента |          мантисса                              |
+
+int 3 в памяти:
+00000000 00000000 00000000 00000011
+\end{lstlisting}
+
+\texttt{static\_cast} \textbf{вычисляет} новое значение: извлекает мантиссу
+и экспоненту, считает целую часть и записывает в формате \texttt{int}. Это реальная
+работа процессора (инструкция \texttt{cvttsd2si} на x86).
+
+\subsubsection{Сценарий 2: Enum $\leftrightarrow$ int}
+
+\begin{lstlisting}
+enum class Color { Red = 0, Green = 1, Blue = 2 };
+
+Color c = Color::Green;
+int num = static_cast<int>(c);          // 1
+Color back = static_cast<Color>(2);     // Color::Blue
+
+// Без static_cast:
+// int num = c;  // Ошибка! enum class не преобразуется неявно
+\end{lstlisting}
+
+\subsubsection{Сценарий 3: \texttt{void*} $\to$ конкретный тип}
+
+\begin{lstlisting}
+// Классический паттерн из C API (pthread, qsort и т.д.)
+void callback(void* data) {
+    // Мы ЗНАЕМ, что передали int*
+    int* ptr = static_cast<int*>(data);
+    std::cout << *ptr << "\n";
+}
+
+int main() {
+    int value = 42;
+    callback(&value);   // int* неявно -> void*
+}
+\end{lstlisting}
+
+\subsubsection{Сценарий 4: Преобразование через конструктор}
+
+\begin{lstlisting}
+class Celsius {
+public:
+    double temp;
+    explicit Celsius(double t) : temp(t) {}
+};
+
+double raw = 36.6;
+// Celsius c = raw;  // Ошибка! Конструктор explicit
+Celsius c = static_cast<Celsius>(raw);  // Явный вызов конструктора
+\end{lstlisting}
+
+\subsubsection{Сценарий 5: Приведение в иерархии наследования (downcast)}
+
+\begin{lstlisting}
+class Animal {
+public:
+    virtual ~Animal() = default;
+    virtual void speak() = 0;
+};
+
+class Dog : public Animal {
+public:
+    void speak() override { std::cout << "Гав!\n"; }
+    void fetch() { std::cout << "Принёс палку!\n"; }
+};
+
+void process(Animal* animal) {
+    // Мы УВЕРЕНЫ, что это Dog (например, из контекста)
+    Dog* dog = static_cast<Dog*>(animal);
+    dog->fetch();  // Работает, если animal действительно Dog
+                   // UB, если animal -- не Dog!
+}
+\end{lstlisting}
+
+\textbf{Важно:} \texttt{static\_cast} \textbf{не проверяет} тип в рантайме.
+Если вы ошиблись --- UB. Для безопасной проверки используйте \texttt{dynamic\_cast}.
+
+\subsubsection{Чего \texttt{static\_cast} НЕ может}
+
+\begin{lstlisting}
+int x = 42;
+// static_cast<double*>(&x);       // Ошибка! int* и double* несовместимы
+// static_cast<std::string>(x);    // Ошибка! Нет конструктора string(int)
+
+const int cx = 10;
+// static_cast<int&>(cx);          // Ошибка! Не может снять const
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{\texttt{reinterpret\_cast} --- <<Рентген памяти>>}
+
+\subsubsection{Суть}
+
+\texttt{reinterpret\_cast} \textbf{не создаёт новый объект}. Он говорит:
+<<Возьми эти байты в памяти и считай, что это другой тип>>. Никаких вычислений,
+никаких преобразований --- чистая переинтерпретация.
+
+\subsubsection{Аналогия}
+
+Представьте книгу на русском языке. \texttt{static\_cast} --- это \textbf{перевод}
+на английский (создаётся новый текст с тем же смыслом). \texttt{reinterpret\_cast} ---
+это попытка \textbf{прочитать русские буквы как английские} (ерунда, но технически
+возможно).
+
+\subsubsection{Пример 1: Заглядываем <<внутрь>> float}
+
+\begin{lstlisting}
+float f = 1.0f;
+
+// Как float хранится в памяти?
+// IEEE 754: 0 01111111 00000000000000000000000 = 0x3F800000
+
+// НЕПРАВИЛЬНО -- UB по стандарту (нарушение strict aliasing):
+int bits_bad = *reinterpret_cast<int*>(&f);
+
+// ПРАВИЛЬНО -- через memcpy (стандарт разрешает):
+int bits;
+std::memcpy(&bits, &f, sizeof(float));
+std::cout << std::hex << bits << "\n";  // 3f800000
+\end{lstlisting}
+
+\textbf{Strict aliasing rule:} обращение к объекту через указатель на <<чужой>> тип ---
+UB (за исключением \texttt{char*}, \texttt{unsigned char*}, \texttt{std::byte*}).
+
+\subsubsection{Пример 2: Указатель $\to$ число и обратно}
+
+\begin{lstlisting}
+int x = 42;
+int* ptr = &x;
+
+// Сохраняем адрес как число
+uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+std::cout << "Адрес: 0x" << std::hex << addr << "\n";
+
+// Восстанавливаем указатель из числа
+int* restored = reinterpret_cast<int*>(addr);
+std::cout << *restored << "\n";  // 42
+
+// Это один из НЕМНОГИХ гарантированных сценариев для reinterpret_cast
+\end{lstlisting}
+
+\subsubsection{Пример 3: Работа с сетевыми пакетами}
+
+\begin{lstlisting}
+// Типичный паттерн при работе с сырыми данными из сети
+struct PacketHeader {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t length;
+};
+
+void process_raw_data(char* buffer, size_t size) {
+    // Технически UB из-за strict aliasing и alignment
+    // Но широко используется на практике
+    auto* header = reinterpret_cast<PacketHeader*>(buffer);
+
+    // Безопасная альтернатива:
+    PacketHeader header_safe;
+    std::memcpy(&header_safe, buffer, sizeof(PacketHeader));
+
+    if (header_safe.magic == 0xDEADBEEF) {
+        // Обрабатываем пакет...
+    }
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{reinterpret\_cast} НЕ может снять \texttt{const}}
+
+\begin{lstlisting}
+const int x = 42;
+// int* p = reinterpret_cast<int*>(&x);  // Ошибка компиляции!
+// Для снятия const нужен const_cast
+\end{lstlisting}
+
+\subsubsection{Когда \texttt{reinterpret\_cast} оправдан?}
+
+Практически \textbf{никогда} в обычном коде. Легитимные случаи:
+\begin{itemize}
+    \item Преобразование указатель $\leftrightarrow$ \texttt{uintptr\_t}
+    \item Преобразование между указателями на функции (с осторожностью)
+    \item Низкоуровневый код (драйверы, аллокаторы, сериализация)
+    \item Работа с C API, которое требует \texttt{void*}
+\end{itemize}
+
+% -------------------------------------------------------
+\subsection{\texttt{const\_cast} --- <<Снятие защиты>>}
+
+\subsubsection{Суть}
+
+\texttt{const\_cast} --- единственный каст, который может \textbf{добавлять или
+убирать} модификаторы \texttt{const} и \texttt{volatile}. Никакой другой каст
+этого не умеет.
+
+\subsubsection{Мягкая форма: добавление \texttt{const}}
+
+Происходит \textbf{постоянно и неявно} --- вы даже не замечаете:
+
+\begin{lstlisting}
+std::vector<int> vec = {1, 2, 3};
+
+// Когда вы вызываете size(), неявно происходит:
+// vec (неконстантный) -> const vec& (константная ссылка внутри size())
+size_t s = vec.size();  // size() объявлен как: size_t size() const;
+
+// Это эквивалентно:
+const std::vector<int>& const_ref = vec;  // Неявное добавление const
+size_t s2 = const_ref.size();
+
+// Явный const_cast (не нужен, но для понимания):
+const std::vector<int>& ref = const_cast<const std::vector<int>&>(vec);
+\end{lstlisting}
+
+Добавление \texttt{const} --- \textbf{бесплатная} операция. Процессор не выполняет
+никаких инструкций --- это чисто компиляторная проверка.
+
+\subsubsection{Жёсткая форма: снятие \texttt{const}}
+
+Вот здесь начинается опасность:
+
+\begin{lstlisting}
+void legacy_api(char* str) {
+    // Старая C-функция, которая НЕ модифицирует строку,
+    // но автор забыл написать const
+    std::cout << str << "\n";
+}
+
+void modern_code(const std::string& s) {
+    // Нужно вызвать legacy_api, но у нас const
+    // legacy_api(s.c_str());  // Ошибка! c_str() возвращает const char*
+
+    legacy_api(const_cast<char*>(s.c_str()));  // Снимаем const
+    // Безопасно ТОЛЬКО если legacy_api реально не изменяет данные!
+}
+\end{lstlisting}
+
+\subsubsection{Главное правило и UB}
+
+\begin{lstlisting}
+// БЕЗОПАСНО: объект изначально НЕ const, мы просто снимаем "лишний" const
+int x = 42;
+const int& ref = x;           // Добавили const
+int& mutable_ref = const_cast<int&>(ref);  // Сняли const
+mutable_ref = 100;             // OK -- x изначально не const
+std::cout << x << "\n";       // 100
+
+// UB: объект изначально ОБЪЯВЛЕН как const
+const int y = 42;
+int& bad_ref = const_cast<int&>(y);  // Компилируется...
+bad_ref = 100;                        // UNDEFINED BEHAVIOR!
+// Компилятор мог поместить y в read-only память
+// Или заменить все обращения к y на литерал 42
+\end{lstlisting}
+
+\textbf{Почему UB?} Компилятор имеет право:
+\begin{itemize}
+    \item Поместить \texttt{const} объект в \textbf{read-only секцию} памяти
+          (запись = segfault)
+    \item \textbf{Заинлайнить} значение: заменить все \texttt{y} на литерал \texttt{42}
+          при компиляции
+    \item Оптимизировать код, \textbf{предполагая}, что значение никогда не меняется
+\end{itemize}
+
+\subsubsection{Реальный use case: избежание дублирования кода}
+
+Классический паттерн для \texttt{operator[]}:
+
+\begin{lstlisting}
+class MyArray {
+    int data[100];
+public:
+    // Константная версия -- основная логика
+    const int& operator[](size_t idx) const {
+        // Допустим, тут сложная проверка границ, логирование и т.д.
+        if (idx >= 100) throw std::out_of_range("Index out of bounds");
+        return data[idx];
+    }
+
+    // Неконстантная версия -- делегирует к константной
+    int& operator[](size_t idx) {
+        // Шаг 1: добавляем const к *this -> вызываем const-версию
+        const auto& result = static_cast<const MyArray&>(*this)[idx];
+        // Шаг 2: снимаем const с результата
+        return const_cast<int&>(result);
+        // Безопасно! Мы знаем, что *this не const (мы в неконстантном методе)
+    }
+};
+\end{lstlisting}
+
+Этот паттерн рекомендован Скоттом Мейерсом в <<Effective C++>>.
+
+% -------------------------------------------------------
+\subsection{\texttt{dynamic\_cast} --- <<Безопасный детектив>> (краткий обзор)}
+
+\texttt{dynamic\_cast} проверяет тип \textbf{в рантайме} через таблицу виртуальных
+функций (RTTI). Подробно изучается в теме ООП, но вот основная идея:
+
+\begin{lstlisting}
+class Base {
+public:
+    virtual ~Base() = default;  // Виртуальный деструктор ОБЯЗАТЕЛЕН
+};
+
+class Derived : public Base {
+public:
+    void special_method() { std::cout << "Я Derived!\n"; }
+};
+
+void safe_process(Base* base) {
+    // dynamic_cast проверяет реальный тип в рантайме
+    Derived* d = dynamic_cast<Derived*>(base);
+
+    if (d != nullptr) {
+        d->special_method();  // Гарантированно безопасно
+    } else {
+        std::cout << "Это не Derived\n";
+    }
+}
+
+// Для ссылок: бросает std::bad_cast при неудаче
+void safe_process_ref(Base& base) {
+    try {
+        Derived& d = dynamic_cast<Derived&>(base);
+        d.special_method();
+    } catch (const std::bad_cast& e) {
+        std::cout << "Не Derived: " << e.what() << "\n";
+    }
+}
+\end{lstlisting}
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Свойство} & \texttt{static\_cast} & \texttt{dynamic\_cast} \\
+\midrule
+Проверка в рантайме   & нет  & да \\
+Нужен \texttt{virtual} & нет  & да \\
+Скорость              & быстрый (0 затрат) & медленнее (RTTI) \\
+При ошибке            & UB   & \texttt{nullptr} или исключение \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\subsection{Сводная таблица: какой каст когда}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Задача} & \textbf{Каст} & \textbf{Пример} \\
+\midrule
+\texttt{int} $\to$ \texttt{double}
+    & \texttt{static\_cast}
+    & \texttt{static\_cast<double>(42)} \\
+\addlinespace
+\texttt{enum} $\to$ \texttt{int}
+    & \texttt{static\_cast}
+    & \texttt{static\_cast<int>(Color::Red)} \\
+\addlinespace
+\texttt{Base*} $\to$ \texttt{Derived*} (уверен)
+    & \texttt{static\_cast}
+    & \texttt{static\_cast<Derived*>(base)} \\
+\addlinespace
+\texttt{Base*} $\to$ \texttt{Derived*} (не уверен)
+    & \texttt{dynamic\_cast}
+    & \texttt{dynamic\_cast<Derived*>(base)} \\
+\addlinespace
+Посмотреть байты объекта
+    & \texttt{memcpy}
+    & Через \texttt{char*} или \texttt{memcpy} \\
+\addlinespace
+Указатель $\leftrightarrow$ число
+    & \texttt{reinterpret\_cast}
+    & \texttt{reinterpret\_cast<uintptr\_t>(ptr)} \\
+\addlinespace
+Снять \texttt{const} для legacy API
+    & \texttt{const\_cast}
+    & \texttt{const\_cast<char*>(c\_str)} \\
+\addlinespace
+\texttt{void*} $\to$ конкретный тип
+    & \texttt{static\_cast}
+    & \texttt{static\_cast<int*>(void\_ptr)} \\
+\addlinespace
+<<Хочу чтобы скомпилировалось>>
+    & \textbf{Ничего}
+    & Подумайте ещё раз о дизайне \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\subsection{Упражнения}
+
+\subsubsection{Упражнение 1: Найди ошибку}
+
+Что не так в каждом фрагменте? Какой результат?
+
+\begin{lstlisting}
+// Фрагмент A
+float f = 3.14f;
+int* p = (int*)&f;
+std::cout << *p << "\n";
+
+// Фрагмент B
+const std::string name = "Alice";
+std::string& ref = const_cast<std::string&>(name);
+ref = "Bob";
+
+// Фрагмент C
+int x = 65;
+char* c = static_cast<char*>(&x);
+\end{lstlisting}
+
+\textbf{Решение:}
+
+\begin{itemize}
+    \item \textbf{Фрагмент A:} C-style cast выполняет
+          \texttt{reinterpret\_cast<int*>(\&f)}. Чтение \texttt{*p} --- UB
+          (нарушение strict aliasing: \texttt{int*} указывает на объект типа
+          \texttt{float}). На практике выведет \texttt{1078523331}
+          (\texttt{0x4048F5C3} --- IEEE~754 представление \texttt{3.14f}),
+          но полагаться на это нельзя.
+
+    \item \textbf{Фрагмент B:} UB! Объект \texttt{name} объявлен как \texttt{const}.
+          Снятие \texttt{const} и модификация --- Undefined Behavior. Компилятор мог
+          разместить \texttt{"Alice"} в read-only памяти (segfault). Или заоптимизировать
+          и продолжать <<видеть>> \texttt{"Alice"}.
+
+    \item \textbf{Фрагмент C:} Ошибка компиляции! \texttt{static\_cast} не может
+          преобразовать \texttt{int*} $\to$ \texttt{char*} (несовместимые типы
+          указателей). Для этого нужен \texttt{reinterpret\_cast<char*>(\&x)} ---
+          и это один из немногих случаев, где такой каст легален (через \texttt{char*}
+          можно читать байты любого объекта).
+\end{itemize}
+
+\subsubsection{Упражнение 2: Перепиши без C-style cast}
+
+Замените C-style касты на правильные C++ касты:
+
+\begin{lstlisting}
+double d = 3.14;
+int i = (int)d;
+
+const char* s = "hello";
+char* p = (char*)s;
+
+Base* b = new Derived();
+Derived* d = (Derived*)b;
+
+void* raw = malloc(100);
+int* arr = (int*)raw;
+\end{lstlisting}
+
+\textbf{Решение:}
+
+\begin{lstlisting}
+double d = 3.14;
+int i = static_cast<int>(d);  // Числовое преобразование
+
+const char* s = "hello";
+char* p = const_cast<char*>(s);  // Снятие const (модификация = UB!)
+
+Base* b = new Derived();
+Derived* d = dynamic_cast<Derived*>(b);  // Безопасный downcast с проверкой
+// Или static_cast<Derived*>(b) если вы на 100% уверены в типе
+
+void* raw = malloc(100);
+int* arr = static_cast<int*>(raw);  // void* -> конкретный тип
+\end{lstlisting}
+
+\subsubsection{Упражнение 3: Что выведет программа?}
+
+\begin{lstlisting}
+#include <iostream>
+
+int main() {
+    int x = 42;
+    const int& cref = x;
+
+    int& ref = const_cast<int&>(cref);
+    ref = 100;
+
+    std::cout << "x = " << x << "\n";
+    std::cout << "cref = " << cref << "\n";
+    std::cout << "ref = " << ref << "\n";
+
+    return 0;
+}
+\end{lstlisting}
+
+\textbf{Решение:}
+
+Вывод:
+\begin{lstlisting}[numbers=none]
+x = 100
+cref = 100
+ref = 100
+\end{lstlisting}
+
+Это \textbf{не UB}, потому что \texttt{x} изначально объявлен как обычный
+(не \texttt{const}) \texttt{int}. Мы лишь добавили \texttt{const} через ссылку,
+а потом сняли его обратно. Все три имени (\texttt{x}, \texttt{cref}, \texttt{ref})
+ссылаются на одну и ту же область памяти, поэтому изменение через \texttt{ref}
+видно через все имена.
+
+Было бы UB, если бы \texttt{x} был объявлен как \texttt{const int x = 42;}.
+
+\subsubsection{Упражнение 4: Реализуй безопасное приведение}
+
+Напишите шаблонную функцию \texttt{safe\_narrow}, которая преобразует числовой
+тип с проверкой потери данных:
+
+\begin{lstlisting}
+template<typename To, typename From>
+To safe_narrow(From value) {
+    // Ваш код здесь
+}
+
+// Использование:
+int big = 1'000'000;
+short s = safe_narrow<short>(big);  // Должно бросить исключение!
+
+double pi = 3.14;
+int i = safe_narrow<int>(pi);  // Должно бросить исключение! (потеря .14)
+\end{lstlisting}
+
+\textbf{Решение:}
+
+\begin{lstlisting}
+#include <stdexcept>
+#include <sstream>
+
+template<typename To, typename From>
+To safe_narrow(From value) {
+    To converted = static_cast<To>(value);
+
+    // Проверяем: если преобразовать обратно, получим ли исходное значение?
+    if (static_cast<From>(converted) != value) {
+        std::ostringstream oss;
+        oss << "Narrowing conversion lost data: " << value
+            << " became " << converted;
+        throw std::runtime_error(oss.str());
+    }
+
+    return converted;
+}
+
+// Тесты:
+int main() {
+    // Безопасные преобразования
+    short s1 = safe_narrow<short>(42);        // OK: 42 помещается в short
+    int i1 = safe_narrow<int>(3.0);           // OK: 3.0 -> 3 без потерь
+
+    // Опасные -- бросают исключение
+    try {
+        short s2 = safe_narrow<short>(1'000'000);  // Переполнение!
+    } catch (const std::runtime_error& e) {
+        std::cout << e.what() << "\n";
+        // "Narrowing conversion lost data: 1000000 became 16960"
+    }
+
+    try {
+        int i2 = safe_narrow<int>(3.14);  // Потеря дробной части!
+    } catch (const std::runtime_error& e) {
+        std::cout << e.what() << "\n";
+        // "Narrowing conversion lost data: 3.14 became 3"
+    }
+}
+\end{lstlisting}
+
+Идея: \texttt{static\_cast} в обе стороны. Если после <<туда-обратно>> значение
+изменилось --- данные потеряны.
+
+\subsubsection{Упражнение 5: Детектив по кастам}
+
+Определите, какой именно каст скрывается за каждым C-style cast. Помните порядок:
+\texttt{const\_cast} $\to$ \texttt{static\_cast} $\to$ \texttt{static\_cast} +
+\texttt{const\_cast} $\to$ \texttt{reinterpret\_cast} $\to$ \texttt{reinterpret\_cast} +
+\texttt{const\_cast}.
+
+\begin{lstlisting}
+// 1.
+double d = 3.14;
+int i = (int)d;
+
+// 2.
+const int x = 42;
+int* p = (int*)&x;
+
+// 3.
+int* ptr = (int*)0xDEADBEEF;
+
+// 4.
+class A {};
+class B : public A {};
+A* a = new B();
+B* b = (B*)a;
+
+// 5.
+const double cd = 2.71;
+int ci = (int)cd;
+\end{lstlisting}
+
+\textbf{Решение:}
+
+\begin{enumerate}
+    \item \texttt{static\_cast<int>(d)} --- стандартное числовое преобразование
+          \texttt{double} $\to$ \texttt{int}. \texttt{const\_cast} не подходит
+          (типы разные), \texttt{static\_cast} подходит первым.
+
+    \item \texttt{const\_cast<int*>(\&x)} --- \texttt{\&x} имеет тип
+          \texttt{const int*}, а цель \texttt{int*}. Разница только в \texttt{const},
+          поэтому это \texttt{const\_cast}. Первый в очереди, и он подходит.
+
+    \item \texttt{reinterpret\_cast<int*>(0xDEADBEEF)} --- целое число $\to$ указатель.
+          \texttt{const\_cast} не подходит (разные типы), \texttt{static\_cast}
+          не умеет \texttt{int} $\to$ указатель. Поэтому \texttt{reinterpret\_cast}.
+
+    \item \texttt{static\_cast<B*>(a)} --- приведение вниз по иерархии (downcast).
+          \texttt{const\_cast} не подходит, \texttt{static\_cast} подходит
+          (есть отношение наследования).
+
+    \item \texttt{static\_cast<int>(cd)} --- \texttt{cd} это значение (rvalue),
+          \texttt{const} на значениях не мешает. Это просто \texttt{static\_cast<int>(cd)} ---
+          числовое преобразование.
+\end{enumerate}
+
+\subsubsection{Упражнение 6: Реализуй type-punning безопасно}
+
+Напишите функцию, которая показывает побитовое представление любого типа:
+
+\begin{lstlisting}
+template<typename T>
+std::string bit_representation(const T& value);
+
+// Использование:
+std::cout << bit_representation(3.14f) << "\n";
+// "01000000 01001000 11110101 11000011"
+
+std::cout << bit_representation(42) << "\n";
+// "00000000 00000000 00000000 00101010"
+\end{lstlisting}
+
+\textbf{Решение:}
+
+\begin{lstlisting}
+#include <cstring>
+#include <string>
+#include <bitset>
+#include <sstream>
+
+template<typename T>
+std::string bit_representation(const T& value) {
+    // Читаем байты через memcpy -- это БЕЗОПАСНО по стандарту
+    unsigned char bytes[sizeof(T)];
+    std::memcpy(bytes, &value, sizeof(T));
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < sizeof(T); ++i) {
+        if (i > 0) oss << " ";
+        oss << std::bitset<8>(bytes[i]);
+    }
+    return oss.str();
+}
+
+int main() {
+    std::cout << "float 3.14f:  " << bit_representation(3.14f) << "\n";
+    std::cout << "int 42:       " << bit_representation(42) << "\n";
+    std::cout << "double 3.14:  " << bit_representation(3.14) << "\n";
+    std::cout << "char 'A':     " << bit_representation('A') << "\n";
+}
+\end{lstlisting}
+
+Ключевой момент: мы используем \texttt{std::memcpy}, а \textbf{не}
+\texttt{reinterpret\_cast}. Это единственный стандартно-безопасный способ
+<<посмотреть на байты>> объекта. Чтение через \texttt{unsigned char*} /
+\texttt{std::byte*} тоже допустимо по стандарту.
+
+% -------------------------------------------------------
+\subsection{Итоговая шпаргалка}
+
+\begin{lstlisting}[numbers=none,basicstyle=\ttfamily\footnotesize]
++-----------------------------------------------------------+
+|                  Какой каст выбрать?                      |
++-----------------------------------------------------------+
+|                                                           |
+|  Нужно преобразовать значение?                            |
+|  (int->double, enum->int, void*->T*)                     |
+|  -> static_cast                                           |
+|                                                           |
+|  Нужно снять/добавить const?                              |
+|  -> const_cast                                            |
+|                                                           |
+|  Нужно посмотреть на байты / указатель<->число?           |
+|  -> reinterpret_cast (а лучше memcpy)                     |
+|                                                           |
+|  Нужно безопасно привести тип в иерархии?                 |
+|  -> dynamic_cast                                          |
+|                                                           |
+|  Не знаете какой?                                         |
+|  -> static_cast (и подумайте, правильно ли спроектирован  |
+|     код, если приходится кастовать)                        |
+|                                                           |
+|  C-style cast?                                            |
+|  -> НИКОГДА в C++ коде                                    |
+|                                                           |
++-----------------------------------------------------------+
+\end{lstlisting}
+
+% ===============================================================
+\newpage
+\section{Иерархия \texttt{std::exception}}
+
+% -------------------------------------------------------
+\subsection{Зачем нужна единая иерархия исключений?}
+
+В разделе про \texttt{throw}/\texttt{catch} мы видели, что бросать можно
+\textbf{любой} объект. Но если каждый программист будет бросать свои типы ---
+наступит хаос: как ловить исключения из чужих библиотек?
+
+Стандартная библиотека определяет \textbf{базовый класс} \texttt{std::exception}
+и целое дерево наследников. Это позволяет:
+\begin{itemize}
+    \item Ловить \textbf{все} стандартные исключения одним \texttt{catch(const std::exception\&)}
+    \item Ловить \textbf{конкретные} типы более специализированными блоками \texttt{catch}
+    \item Создавать \textbf{свои} исключения, наследуясь от стандартных
+\end{itemize}
+
+% -------------------------------------------------------
+\subsection{Класс \texttt{std::exception}}
+
+Определён в заголовке \texttt{<exception>}.
+
+\subsubsection{Интерфейс}
+
+\begin{lstlisting}
+class exception {
+public:
+    exception() noexcept;
+    exception(const exception&) noexcept;
+    exception& operator=(const exception&) noexcept;
+    virtual ~exception() noexcept;
+
+    virtual const char* what() const noexcept;
+};
+\end{lstlisting}
+
+\begin{itemize}
+    \item Все специальные методы помечены \texttt{noexcept} --- исключение
+          \textbf{не должно} бросать исключений при своём создании/копировании.
+    \item Единственный содержательный метод --- \texttt{what()}: возвращает
+          C-строку с описанием ошибки.
+    \item \texttt{what()} объявлен \texttt{virtual} --- наследники переопределяют его.
+\end{itemize}
+
+\subsubsection{Пример использования}
+
+\begin{lstlisting}
+#include <iostream>
+#include <exception>
+
+int main() {
+    try {
+        throw std::exception();  // Базовое исключение (редко бросают напрямую)
+    } catch (const std::exception& e) {
+        std::cout << e.what() << "\n";  // "std::exception" (зависит от реализации)
+    }
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Дерево стандартных исключений}
+
+\begin{lstlisting}[numbers=none,basicstyle=\ttfamily\footnotesize]
+std::exception
+|
++-- std::logic_error              (ошибки логики программы)
+|   +-- std::invalid_argument     (неверный аргумент)
+|   +-- std::domain_error         (значение вне области определения)
+|   +-- std::length_error         (превышение максимального размера)
+|   +-- std::out_of_range         (индекс за пределами)
+|
++-- std::runtime_error            (ошибки времени выполнения)
+|   +-- std::range_error          (результат вне диапазона)
+|   +-- std::overflow_error       (арифметическое переполнение)
+|   +-- std::underflow_error      (арифметическое антипереполнение)
+|   +-- std::system_error         (ошибки ОС, C++11)
+|
++-- std::bad_alloc                (нехватка памяти при new)
++-- std::bad_cast                 (неудачный dynamic_cast)
++-- std::bad_typeid               (typeid от nullptr)
++-- std::bad_exception            (нарушение спецификации исключений)
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{\texttt{std::logic\_error} и \texttt{std::runtime\_error}}
+
+Оба определены в \texttt{<stdexcept>} и хранят строку сообщения.
+
+\subsubsection{Конструкторы}
+
+\begin{lstlisting}
+#include <stdexcept>
+
+// Принимают std::string или const char*
+std::logic_error   err1("ошибка логики");
+std::runtime_error err2("ошибка выполнения");
+
+// what() вернёт переданную строку
+std::cout << err1.what() << "\n";  // "ошибка логики"
+std::cout << err2.what() << "\n";  // "ошибка выполнения"
+\end{lstlisting}
+
+\subsubsection{Когда что бросать?}
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+\textbf{Тип} & \textbf{Смысл} & \textbf{Пример} \\
+\midrule
+\texttt{logic\_error}
+    & Ошибка, которую \textit{можно было} предотвратить проверкой в коде
+    & Передали отрицательный размер массива \\
+\addlinespace
+\texttt{runtime\_error}
+    & Ошибка, которую \textit{нельзя} предсказать заранее
+    & Файл не найден, сеть недоступна \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\subsection{Наследники \texttt{std::logic\_error}}
+
+\subsubsection{\texttt{std::invalid\_argument}}
+
+Аргумент функции имеет недопустимое значение.
+
+\begin{lstlisting}
+#include <stdexcept>
+#include <string>
+
+int parse_positive(const std::string& s) {
+    int val = std::stoi(s);  // сам stoi может бросить invalid_argument
+    if (val <= 0) {
+        throw std::invalid_argument("expected positive number, got: " + s);
+    }
+    return val;
+}
+
+int main() {
+    try {
+        parse_positive("-5");
+    } catch (const std::invalid_argument& e) {
+        std::cout << "Ошибка: " << e.what() << "\n";
+        // "Ошибка: expected positive number, got: -5"
+    }
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{std::out\_of\_range}}
+
+Индекс или ключ вне допустимого диапазона.
+
+\begin{lstlisting}
+#include <vector>
+#include <stdexcept>
+
+int main() {
+    std::vector<int> v = {10, 20, 30};
+
+    try {
+        int val = v.at(100);  // бросает std::out_of_range
+    } catch (const std::out_of_range& e) {
+        std::cout << e.what() << "\n";  // сообщение зависит от реализации
+    }
+
+    // Для сравнения: v[100] -- UB, никакого исключения
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{std::length\_error}}
+
+Попытка создать объект, превышающий максимально допустимый размер.
+
+\begin{lstlisting}
+#include <vector>
+#include <stdexcept>
+
+int main() {
+    try {
+        std::vector<int> v;
+        v.reserve(v.max_size() + 1);  // бросает std::length_error
+    } catch (const std::length_error& e) {
+        std::cout << e.what() << "\n";
+    }
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{std::domain\_error}}
+
+Математическая функция получила значение вне области определения.
+
+\begin{lstlisting}
+#include <cmath>
+#include <stdexcept>
+
+double safe_sqrt(double x) {
+    if (x < 0) {
+        throw std::domain_error("sqrt of negative number");
+    }
+    return std::sqrt(x);
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Наследники \texttt{std::runtime\_error}}
+
+\subsubsection{\texttt{std::overflow\_error} и \texttt{std::underflow\_error}}
+
+\begin{lstlisting}
+#include <stdexcept>
+#include <limits>
+
+unsigned int safe_multiply(unsigned int a, unsigned int b) {
+    if (a != 0 && b > std::numeric_limits<unsigned int>::max() / a) {
+        throw std::overflow_error("unsigned multiplication overflow");
+    }
+    return a * b;
+}
+
+int main() {
+    try {
+        auto result = safe_multiply(1'000'000'000u, 5u);
+    } catch (const std::overflow_error& e) {
+        std::cout << e.what() << "\n";
+    }
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{std::system\_error} (C++11)}
+
+Обёртка над ошибками операционной системы. Хранит \texttt{std::error\_code}.
+
+\begin{lstlisting}
+#include <system_error>
+#include <fstream>
+
+void open_file(const std::string& path) {
+    std::ifstream f(path);
+    if (!f.is_open()) {
+        throw std::system_error(
+            std::make_error_code(std::errc::no_such_file_or_directory),
+            "cannot open: " + path
+        );
+    }
+}
+
+int main() {
+    try {
+        open_file("/nonexistent/file.txt");
+    } catch (const std::system_error& e) {
+        std::cout << "Код: " << e.code() << "\n";
+        std::cout << "Что: " << e.what() << "\n";
+    }
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Отдельные исключения (не наследуют \texttt{logic/runtime\_error})}
+
+\subsubsection{\texttt{std::bad\_alloc}}
+
+Бросается оператором \texttt{new} при нехватке памяти.
+
+\begin{lstlisting}
+#include <new>
+#include <iostream>
+
+int main() {
+    try {
+        // Попытка выделить абсурдно много памяти
+        int* p = new int[1'000'000'000'000LL];
+    } catch (const std::bad_alloc& e) {
+        std::cout << "Нехватка памяти: " << e.what() << "\n";
+    }
+
+    // Альтернатива: new(std::nothrow) возвращает nullptr вместо исключения
+    int* p = new(std::nothrow) int[1'000'000'000'000LL];
+    if (p == nullptr) {
+        std::cout << "Не удалось выделить память\n";
+    }
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{std::bad\_cast}}
+
+Бросается при неудачном \texttt{dynamic\_cast} к ссылке.
+
+\begin{lstlisting}
+#include <typeinfo>
+
+class Base { public: virtual ~Base() = default; };
+class Derived : public Base {};
+class Other : public Base {};
+
+int main() {
+    Derived d;
+    Base& ref = d;
+
+    try {
+        Other& o = dynamic_cast<Other&>(ref);  // Неудача!
+    } catch (const std::bad_cast& e) {
+        std::cout << e.what() << "\n";  // "std::bad_cast"
+    }
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Создание собственных исключений}
+
+\begin{lstlisting}
+#include <stdexcept>
+#include <string>
+
+class HttpError : public std::runtime_error {
+    int status_code_;
+public:
+    HttpError(int code, const std::string& msg)
+        : std::runtime_error(msg), status_code_(code) {}
+
+    int status_code() const noexcept { return status_code_; }
+};
+
+class NotFoundError : public HttpError {
+public:
+    explicit NotFoundError(const std::string& url)
+        : HttpError(404, "Not found: " + url) {}
+};
+
+void fetch(const std::string& url) {
+    throw NotFoundError(url);
+}
+
+int main() {
+    try {
+        fetch("/api/users/999");
+    } catch (const HttpError& e) {
+        std::cout << "HTTP " << e.status_code() << ": " << e.what() << "\n";
+        // "HTTP 404: Not found: /api/users/999"
+    }
+    // Также можно поймать как std::runtime_error или std::exception
+}
+\end{lstlisting}
+
+\textbf{Рекомендации:}
+\begin{itemize}
+    \item Наследуйтесь от \texttt{std::runtime\_error} или \texttt{std::logic\_error},
+          а не от голого \texttt{std::exception} --- так вы получаете хранение строки
+          бесплатно.
+    \item Все методы исключений делайте \texttt{noexcept} (кроме конструктора,
+          которому нужно скопировать строку).
+\end{itemize}
+
+% ===============================================================
+\newpage
+\section{\texttt{std::optional} (C++17)}
+
+% -------------------------------------------------------
+\subsection{Зачем нужен \texttt{std::optional}?}
+
+Как обозначить <<значения нет>>? Исторически использовались костыли:
+
+\begin{center}
+\begin{tabular}{lp{4cm}p{5cm}}
+\toprule
+\textbf{Способ} & \textbf{Пример} & \textbf{Проблема} \\
+\midrule
+Магическое значение
+    & \texttt{return -1;}
+    & А если \texttt{-1} --- допустимый результат? \\
+\addlinespace
+Указатель
+    & \texttt{return nullptr;}
+    & Динамическая память, ownership неясен \\
+\addlinespace
+Пара \texttt{bool + value}
+    & \texttt{std::pair<bool, T>}
+    & Можно прочитать \texttt{value} при \texttt{false} \\
+\addlinespace
+Исключение
+    & \texttt{throw NotFound\{\}}
+    & Дорого, если <<нет значения>> --- обычная ситуация \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\texttt{std::optional<T>} --- это контейнер, который хранит \textbf{либо значение
+типа \texttt{T}, либо ничего}. Определён в \texttt{<optional>}.
+
+% -------------------------------------------------------
+\subsection{Создание}
+
+\subsubsection{Конструкторы}
+
+\begin{lstlisting}
+#include <optional>
+#include <string>
+
+// 1. Пустой optional
+std::optional<int> empty;                    // нет значения
+std::optional<int> also_empty = std::nullopt; // то же самое, явно
+
+// 2. С значением
+std::optional<int> opt1 = 42;               // содержит 42
+std::optional<int> opt2(42);                // то же самое
+std::optional<std::string> opt3("hello");   // содержит "hello"
+
+// 3. in-place конструирование (без лишних копий)
+std::optional<std::string> opt4(std::in_place, 5, 'x');  // содержит "xxxxx"
+// Эквивалентно: std::string(5, 'x')
+
+// 4. make_optional (выводит тип автоматически)
+auto opt5 = std::make_optional(3.14);       // std::optional<double>
+auto opt6 = std::make_optional<std::string>(5, 'x');  // "xxxxx"
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Проверка наличия значения}
+
+\subsubsection{\texttt{has\_value()} и \texttt{operator bool()}}
+
+\begin{lstlisting}
+std::optional<int> opt = 42;
+std::optional<int> empty;
+
+// Способ 1: has_value()
+if (opt.has_value()) {
+    std::cout << "Есть значение\n";
+}
+
+// Способ 2: неявное преобразование в bool
+if (opt) {
+    std::cout << "Есть значение\n";   // то же самое
+}
+
+if (!empty) {
+    std::cout << "Пусто\n";
+}
+\end{lstlisting}
+
+Оба способа эквивалентны. \texttt{operator bool()} --- просто сокращение
+для \texttt{has\_value()}.
+
+% -------------------------------------------------------
+\subsection{Доступ к значению}
+
+\subsubsection{\texttt{operator*()} и \texttt{operator->()}}
+
+Доступ \textbf{без проверки}. Если значения нет --- UB.
+
+\begin{lstlisting}
+std::optional<std::string> opt = "hello";
+
+// operator* -- доступ к значению
+std::string& s = *opt;
+std::cout << s << "\n";       // "hello"
+
+// operator-> -- доступ к членам
+std::cout << opt->size() << "\n";  // 5
+
+// UB! Нет значения, но обращаемся:
+std::optional<int> empty;
+// int x = *empty;  // UB -- поведение не определено
+\end{lstlisting}
+
+\subsubsection{\texttt{value()}}
+
+Доступ \textbf{с проверкой}. Если значения нет --- бросает \texttt{std::bad\_optional\_access}.
+
+\begin{lstlisting}
+#include <optional>
+#include <iostream>
+
+int main() {
+    std::optional<int> opt = 42;
+    std::cout << opt.value() << "\n";  // 42
+
+    std::optional<int> empty;
+    try {
+        int x = empty.value();  // Бросает исключение!
+    } catch (const std::bad_optional_access& e) {
+        std::cout << e.what() << "\n";  // "bad optional access"
+    }
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{value\_or(default)}}
+
+Возвращает значение, если есть, иначе --- переданное значение по умолчанию.
+
+\begin{lstlisting}
+std::optional<int> opt = 42;
+std::optional<int> empty;
+
+std::cout << opt.value_or(0) << "\n";    // 42 (есть значение)
+std::cout << empty.value_or(0) << "\n";  // 0  (пусто, вернул default)
+
+// Удобно для конфигурации:
+std::optional<std::string> user_name;  // пользователь не указал имя
+std::string name = user_name.value_or("Anonymous");
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Модификация}
+
+\subsubsection{\texttt{emplace(args...)}}
+
+Создаёт значение <<на месте>>, разрушая предыдущее (если было).
+
+\begin{lstlisting}
+std::optional<std::string> opt;
+
+opt.emplace(5, 'a');         // Создаёт "aaaaa" внутри optional
+std::cout << *opt << "\n";   // "aaaaa"
+
+opt.emplace("hello");        // Старое разрушено, создано "hello"
+std::cout << *opt << "\n";   // "hello"
+\end{lstlisting}
+
+\subsubsection{\texttt{reset()}}
+
+Разрушает значение (если было), optional становится пустым.
+
+\begin{lstlisting}
+std::optional<std::string> opt = "hello";
+std::cout << opt.has_value() << "\n";  // 1 (true)
+
+opt.reset();
+std::cout << opt.has_value() << "\n";  // 0 (false)
+
+// Эквивалентно:
+opt = std::nullopt;
+\end{lstlisting}
+
+\subsubsection{Присваивание}
+
+\begin{lstlisting}
+std::optional<int> opt;
+
+opt = 42;              // Теперь содержит 42
+opt = 100;             // Теперь содержит 100
+opt = std::nullopt;    // Теперь пустой
+opt = {};              // Тоже пустой
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Сравнение}
+
+\texttt{std::optional} поддерживает все операторы сравнения:
+
+\begin{lstlisting}
+std::optional<int> a = 5;
+std::optional<int> b = 10;
+std::optional<int> c;       // пустой
+std::optional<int> d;       // пустой
+
+// optional с optional
+std::cout << (a < b) << "\n";    // 1 (true): 5 < 10
+std::cout << (a == b) << "\n";   // 0 (false)
+std::cout << (c == d) << "\n";   // 1 (true): оба пустые
+std::cout << (c < a) << "\n";    // 1 (true): пустой < любого значения
+
+// optional с значением
+std::cout << (a == 5) << "\n";   // 1 (true)
+std::cout << (c == 5) << "\n";   // 0 (false): пустой != значение
+
+// optional с nullopt
+std::cout << (c == std::nullopt) << "\n";  // 1 (true)
+std::cout << (a == std::nullopt) << "\n";  // 0 (false)
+\end{lstlisting}
+
+\textbf{Правила:}
+\begin{itemize}
+    \item Два пустых optional \textbf{равны}
+    \item Пустой optional \textbf{меньше} любого непустого
+    \item Два непустых сравниваются по значениям внутри
+\end{itemize}
+
+% -------------------------------------------------------
+\subsection{Монадический интерфейс (C++23)}
+
+C++23 добавил три метода для удобной цепочки операций.
+
+\subsubsection{\texttt{and\_then(f)}}
+
+Если есть значение --- применяет \texttt{f} (которая сама возвращает \texttt{optional}).
+Если пусто --- возвращает пустой \texttt{optional}.
+
+\begin{lstlisting}
+// C++23
+std::optional<std::string> get_env(const char* name);  // может вернуть nullopt
+std::optional<int> parse_int(const std::string& s);    // может вернуть nullopt
+
+// Цепочка: получить переменную среды -> распарсить как int
+std::optional<int> port = get_env("PORT").and_then(parse_int);
+
+// Без and_then (C++17):
+std::optional<int> port2;
+if (auto env = get_env("PORT")) {
+    port2 = parse_int(*env);
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{transform(f)}}
+
+Если есть значение --- применяет \texttt{f} и оборачивает результат в \texttt{optional}.
+Если пусто --- возвращает пустой.
+
+\begin{lstlisting}
+// C++23
+std::optional<std::string> name = "hello";
+std::optional<size_t> len = name.transform([](const std::string& s) {
+    return s.size();
+});
+// len содержит 5
+
+std::optional<std::string> empty;
+std::optional<size_t> no_len = empty.transform([](const std::string& s) {
+    return s.size();
+});
+// no_len пуст
+\end{lstlisting}
+
+\subsubsection{\texttt{or\_else(f)}}
+
+Если есть значение --- возвращает его. Если пусто --- вызывает \texttt{f}
+(которая возвращает \texttt{optional}).
+
+\begin{lstlisting}
+// C++23
+std::optional<std::string> primary_config();    // может быть nullopt
+std::optional<std::string> fallback_config();   // может быть nullopt
+
+// Попробовать primary, если нет -- fallback
+auto config = primary_config().or_else(fallback_config);
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Где хранится значение?}
+
+\texttt{std::optional<T>} хранит объект \textbf{внутри себя} (на стеке),
+без динамической памяти. Упрощённая реализация:
+
+\begin{lstlisting}
+template<typename T>
+class optional {
+    alignas(T) unsigned char storage_[sizeof(T)];  // Сырая память
+    bool has_value_;
+
+    T& get() { return *reinterpret_cast<T*>(storage_); }
+    const T& get() const { return *reinterpret_cast<const T*>(storage_); }
+
+public:
+    optional() : has_value_(false) {}
+
+    optional(const T& value) : has_value_(true) {
+        new (storage_) T(value);          // placement new
+    }
+
+    ~optional() {
+        if (has_value_) get().~T();       // явный вызов деструктора
+    }
+
+    bool has_value() const { return has_value_; }
+    T& operator*() { return get(); }
+    T& value() {
+        if (!has_value_) throw std::bad_optional_access();
+        return get();
+    }
+
+    void reset() {
+        if (has_value_) {
+            get().~T();
+            has_value_ = false;
+        }
+    }
+};
+\end{lstlisting}
+
+\texttt{sizeof(std::optional<T>)} $\approx$ \texttt{sizeof(T)} + \texttt{sizeof(bool)}
++ выравнивание.
+
+% -------------------------------------------------------
+\subsection{Типичные паттерны использования}
+
+\subsubsection{Функция, которая может не вернуть результат}
+
+\begin{lstlisting}
+#include <optional>
+#include <vector>
+#include <algorithm>
+
+// Найти элемент в векторе
+template<typename T>
+std::optional<size_t> find_index(const std::vector<T>& v, const T& target) {
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (v[i] == target) return i;
+    }
+    return std::nullopt;  // Не нашли
+}
+
+int main() {
+    std::vector<int> v = {10, 20, 30, 40, 50};
+
+    if (auto idx = find_index(v, 30)) {
+        std::cout << "Найден на позиции " << *idx << "\n";  // 2
+    } else {
+        std::cout << "Не найден\n";
+    }
+}
+\end{lstlisting}
+
+\subsubsection{Ленивая инициализация (кэширование)}
+
+\begin{lstlisting}
+class Config {
+    mutable std::optional<std::string> cached_name_;
+
+public:
+    const std::string& get_name() const {
+        if (!cached_name_) {
+            cached_name_ = expensive_computation();  // Считаем один раз
+        }
+        return *cached_name_;
+    }
+
+    void invalidate() { cached_name_.reset(); }  // Сбросить кэш
+};
+\end{lstlisting}
+
+\subsubsection{Необязательные параметры структуры}
+
+\begin{lstlisting}
+struct UserProfile {
+    std::string name;
+    std::string email;
+    std::optional<std::string> phone;    // Может отсутствовать
+    std::optional<int> age;              // Может отсутствовать
+};
+
+void print_profile(const UserProfile& u) {
+    std::cout << "Name: " << u.name << "\n";
+    std::cout << "Email: " << u.email << "\n";
+
+    if (u.phone) {
+        std::cout << "Phone: " << *u.phone << "\n";
+    }
+
+    std::cout << "Age: " << u.age.value_or(-1) << "\n";
+}
+\end{lstlisting}
+
+% ===============================================================
+\newpage
+\section{\texttt{std::expected} (C++23)}
+
+% -------------------------------------------------------
+\subsection{Зачем нужен \texttt{std::expected}?}
+
+\texttt{std::optional} говорит: <<значение есть или его нет>>. Но \textbf{почему}
+его нет? \texttt{optional} не даёт ответа.
+
+\texttt{std::expected<T, E>} --- это контейнер, который хранит \textbf{либо
+значение типа \texttt{T} (успех), либо ошибку типа \texttt{E} (неудача)}.
+Определён в \texttt{<expected>} (C++23).
+
+\begin{center}
+\begin{tabular}{lp{4cm}p{4cm}}
+\toprule
+\textbf{Тип} & \textbf{Хранит} & \textbf{Когда использовать} \\
+\midrule
+\texttt{optional<T>}
+    & \texttt{T} или ничего
+    & <<Может не быть значения>> \\
+\addlinespace
+\texttt{expected<T,E>}
+    & \texttt{T} или \texttt{E}
+    & <<Может быть ошибка, и важно знать какая>> \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Это альтернатива исключениям для случаев, когда ошибка --- \textbf{ожидаемая}
+часть логики (не исключительная ситуация):
+
+\begin{center}
+\begin{tabular}{lp{4.5cm}p{4.5cm}}
+\toprule
+& \textbf{Исключения} & \texttt{std::expected} \\
+\midrule
+Когда использовать
+    & Действительно исключительные ситуации
+    & Ожидаемые ошибки (парсинг, I/O, валидация) \\
+\addlinespace
+Стоимость ошибки
+    & Дорого (раскрутка стека)
+    & Дёшево (просто union) \\
+\addlinespace
+Видимость в API
+    & Скрыта (надо читать документацию)
+    & Явна в типе возвращаемого значения \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\subsection{Создание}
+
+\subsubsection{Создание со значением (успех)}
+
+\begin{lstlisting}
+#include <expected>
+#include <string>
+
+// Неявно из значения
+std::expected<int, std::string> result = 42;  // Содержит значение 42
+
+// Явно
+std::expected<int, std::string> result2(42);
+
+// in-place конструирование
+std::expected<std::string, int> result3(std::in_place, 5, 'x');  // "xxxxx"
+\end{lstlisting}
+
+\subsubsection{Создание с ошибкой (неудача)}
+
+\begin{lstlisting}
+// Через std::unexpected
+std::expected<int, std::string> err = std::unexpected("file not found");
+
+// Явное создание
+std::expected<int, std::string> err2(std::unexpected("parse error"));
+
+// in-place конструирование ошибки
+std::expected<int, std::string> err3(std::unexpect, "timeout");
+\end{lstlisting}
+
+\textbf{Важно:} нельзя просто присвоить ошибку напрямую --- нужна обёртка
+\texttt{std::unexpected}, чтобы компилятор отличил значение от ошибки:
+
+\begin{lstlisting}
+// Если T и E -- один тип, без unexpected была бы неоднозначность:
+std::expected<std::string, std::string> result = "hello";  // Это значение!
+std::expected<std::string, std::string> error =
+    std::unexpected("oops");                               // Это ошибка!
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Проверка состояния}
+
+\subsubsection{\texttt{has\_value()} и \texttt{operator bool()}}
+
+\begin{lstlisting}
+std::expected<int, std::string> ok = 42;
+std::expected<int, std::string> err = std::unexpected("fail");
+
+if (ok.has_value()) { /* true  */ }
+if (ok)             { /* true  */ }
+
+if (err.has_value()) { /* false */ }
+if (!err)            { /* true  */ }
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Доступ к значению}
+
+\subsubsection{\texttt{operator*()} и \texttt{operator->()}}
+
+Доступ без проверки. Если содержит ошибку --- UB.
+
+\begin{lstlisting}
+std::expected<std::string, int> result = "hello";
+
+std::string& s = *result;
+std::cout << s << "\n";           // "hello"
+std::cout << result->size() << "\n";  // 5
+
+// UB:
+std::expected<int, std::string> err = std::unexpected("fail");
+// int x = *err;  // UB!
+\end{lstlisting}
+
+\subsubsection{\texttt{value()}}
+
+Доступ с проверкой. Если ошибка --- бросает \texttt{std::bad\_expected\_access<E>}.
+
+\begin{lstlisting}
+std::expected<int, std::string> ok = 42;
+std::cout << ok.value() << "\n";  // 42
+
+std::expected<int, std::string> err = std::unexpected("file not found");
+try {
+    int x = err.value();  // Бросает исключение!
+} catch (const std::bad_expected_access<std::string>& e) {
+    // e.error() возвращает хранимую ошибку
+    std::cout << "Ошибка: " << e.error() << "\n";  // "file not found"
+}
+\end{lstlisting}
+
+\subsubsection{\texttt{value\_or(default)}}
+
+\begin{lstlisting}
+std::expected<int, std::string> ok = 42;
+std::expected<int, std::string> err = std::unexpected("fail");
+
+std::cout << ok.value_or(0) << "\n";   // 42
+std::cout << err.value_or(0) << "\n";  // 0
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Доступ к ошибке}
+
+\subsubsection{\texttt{error()}}
+
+Возвращает хранимую ошибку. Если содержит значение (а не ошибку) --- UB.
+
+\begin{lstlisting}
+std::expected<int, std::string> err = std::unexpected("timeout");
+
+std::cout << err.error() << "\n";  // "timeout"
+
+// UB:
+std::expected<int, std::string> ok = 42;
+// auto e = ok.error();  // UB! Есть значение, а не ошибка
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Модификация}
+
+\subsubsection{\texttt{emplace(args...)}}
+
+\begin{lstlisting}
+std::expected<std::string, int> result = std::unexpected(404);
+
+// Заменяем ошибку на значение
+result.emplace(5, 'x');              // Теперь содержит "xxxxx"
+std::cout << *result << "\n";        // "xxxxx"
+\end{lstlisting}
+
+\subsubsection{Присваивание}
+
+\begin{lstlisting}
+std::expected<int, std::string> result = 42;
+
+result = 100;                              // Значение 100
+result = std::unexpected("new error");     // Теперь ошибка
+result = 200;                              // Снова значение
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Монадический интерфейс (C++23)}
+
+Те же три метода, что и у \texttt{optional}, плюс \texttt{or\_else} работает
+с ошибкой.
+
+\subsubsection{\texttt{and\_then(f)}}
+
+Если значение --- применяет \texttt{f} (возвращающую \texttt{expected}).
+Если ошибка --- пробрасывает ошибку.
+
+\begin{lstlisting}
+using Result = std::expected<int, std::string>;
+
+Result parse_int(const std::string& s) {
+    try {
+        return std::stoi(s);
+    } catch (...) {
+        return std::unexpected("parse error: " + s);
+    }
+}
+
+Result validate_positive(int x) {
+    if (x > 0) return x;
+    return std::unexpected("must be positive");
+}
+
+// Цепочка: парсим -> проверяем
+Result result = parse_int("42").and_then(validate_positive);
+// result содержит 42
+
+Result fail = parse_int("abc").and_then(validate_positive);
+// fail содержит ошибку "parse error: abc"
+// validate_positive даже не вызывалась!
+\end{lstlisting}
+
+\subsubsection{\texttt{transform(f)}}
+
+Если значение --- применяет \texttt{f}, оборачивает результат в \texttt{expected}.
+Если ошибка --- пробрасывает.
+
+\begin{lstlisting}
+std::expected<int, std::string> result = 42;
+
+auto doubled = result.transform([](int x) { return x * 2; });
+// doubled содержит 84
+
+std::expected<int, std::string> err = std::unexpected("fail");
+auto still_err = err.transform([](int x) { return x * 2; });
+// still_err содержит ошибку "fail"
+\end{lstlisting}
+
+\subsubsection{\texttt{or\_else(f)}}
+
+Если значение --- возвращает его. Если ошибка --- вызывает \texttt{f} с ошибкой.
+
+\begin{lstlisting}
+using Result = std::expected<int, std::string>;
+
+Result primary_source();
+Result fallback_source(const std::string& error);
+
+// Если primary не удался -- пробуем fallback, передавая ему текст ошибки
+auto result = primary_source().or_else(fallback_source);
+\end{lstlisting}
+
+\subsubsection{\texttt{transform\_error(f)}}
+
+Преобразует ошибку, не трогая значение. Полезно для конвертации типов ошибок.
+
+\begin{lstlisting}
+std::expected<int, int> result = std::unexpected(404);
+
+// Преобразуем int-ошибку в строку
+auto with_msg = result.transform_error([](int code) {
+    return "HTTP error " + std::to_string(code);
+});
+// with_msg имеет тип std::expected<int, std::string>
+// Содержит ошибку "HTTP error 404"
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Где хранится значение?}
+
+Как и \texttt{optional}, хранит данные \textbf{внутри себя} без динамической
+памяти. Внутри --- \texttt{union} из \texttt{T} и \texttt{E}:
+
+\begin{lstlisting}
+// Упрощённая реализация
+template<typename T, typename E>
+class expected {
+    union {
+        T value_;
+        E error_;
+    };
+    bool has_value_;
+
+public:
+    expected(const T& val) : value_(val), has_value_(true) {}
+
+    expected(std::unexpected<E> err)
+        : error_(std::move(err).error()), has_value_(false) {}
+
+    ~expected() {
+        if (has_value_) value_.~T();
+        else            error_.~E();
+    }
+
+    bool has_value() const { return has_value_; }
+    T& operator*() { return value_; }
+    E& error() { return error_; }
+
+    T& value() {
+        if (!has_value_) throw std::bad_expected_access(error_);
+        return value_;
+    }
+};
+\end{lstlisting}
+
+\texttt{sizeof(std::expected<T, E>)} $\approx$
+$\max(\texttt{sizeof(T)}, \texttt{sizeof(E)})$ + \texttt{sizeof(bool)} + выравнивание.
+
+% -------------------------------------------------------
+\subsection{\texttt{std::expected<void, E>}}
+
+Специализация для функций, которые не возвращают значение, но могут вернуть ошибку.
+
+\begin{lstlisting}
+std::expected<void, std::string> save_file(const std::string& path) {
+    std::ofstream f(path);
+    if (!f.is_open()) {
+        return std::unexpected("cannot open: " + path);
+    }
+    f << "data";
+    if (f.fail()) {
+        return std::unexpected("write failed");
+    }
+    return {};  // Успех (void)
+}
+
+int main() {
+    auto result = save_file("/tmp/test.txt");
+    if (!result) {
+        std::cerr << "Ошибка: " << result.error() << "\n";
+    }
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Типичные паттерны использования}
+
+\subsubsection{Парсинг с информативной ошибкой}
+
+\begin{lstlisting}
+#include <expected>
+#include <string>
+#include <charconv>
+
+enum class ParseError {
+    empty_input,
+    invalid_format,
+    out_of_range,
+};
+
+std::expected<int, ParseError> parse_int(std::string_view sv) {
+    if (sv.empty()) {
+        return std::unexpected(ParseError::empty_input);
+    }
+
+    int result;
+    auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), result);
+
+    if (ec == std::errc::invalid_argument) {
+        return std::unexpected(ParseError::invalid_format);
+    }
+    if (ec == std::errc::result_out_of_range) {
+        return std::unexpected(ParseError::out_of_range);
+    }
+
+    return result;
+}
+
+int main() {
+    auto r1 = parse_int("42");
+    if (r1) std::cout << "OK: " << *r1 << "\n";
+
+    auto r2 = parse_int("abc");
+    if (!r2) {
+        switch (r2.error()) {
+            case ParseError::empty_input:    std::cout << "Пусто\n"; break;
+            case ParseError::invalid_format: std::cout << "Формат\n"; break;
+            case ParseError::out_of_range:   std::cout << "Диапазон\n"; break;
+        }
+    }
+}
+\end{lstlisting}
+
+\subsubsection{Цепочка операций}
+
+\begin{lstlisting}
+using Result = std::expected<int, std::string>;
+
+Result read_config_value(const std::string& key);
+Result validate_range(int value);
+Result apply_multiplier(int value);
+
+// Элегантная цепочка без вложенных if:
+auto final_result = read_config_value("timeout")
+    .and_then(validate_range)
+    .and_then(apply_multiplier)
+    .transform([](int x) { return x + 1; });
+
+// Если любой шаг вернул ошибку -- она пробрасывается до конца
+if (final_result) {
+    std::cout << "Результат: " << *final_result << "\n";
+} else {
+    std::cerr << "Ошибка: " << final_result.error() << "\n";
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Сводная таблица: \texttt{optional} vs \texttt{expected} vs исключения}
+
+\begin{center}
+\begin{tabular}{lp{3.5cm}p{3.5cm}p{3.5cm}}
+\toprule
+& \texttt{optional<T>} & \texttt{expected<T,E>} & Исключения \\
+\midrule
+Информация об ошибке
+    & Нет
+    & Да (тип \texttt{E})
+    & Да \\
+\addlinespace
+Стоимость ошибки
+    & Нулевая
+    & Нулевая
+    & Высокая \\
+\addlinespace
+Стоимость успеха
+    & Нулевая
+    & Нулевая
+    & Нулевая \\
+\addlinespace
+Можно забыть проверить
+    & Да
+    & Да
+    & Нет \\
+\addlinespace
+Видимость в API
+    & Явная
+    & Явная
+    & Скрытая \\
+\addlinespace
+Стандарт
+    & C++17
+    & C++23
+    & C++98 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ===============================================================
+\newpage
+\section{CRTP --- Curiously Recurring Template Pattern}
+
+% -------------------------------------------------------
+\subsection{Что такое CRTP?}
+
+\textbf{CRTP (Curiously Recurring Template Pattern)} --- паттерн, при котором
+класс наследуется от шаблонного базового класса, \textbf{передавая себя}
+в качестве шаблонного параметра:
+
+\begin{lstlisting}
+template<typename Derived>
+class Base {
+    // Base "знает" тип своего наследника
+};
+
+class MyClass : public Base<MyClass> {
+    // MyClass наследуется от Base<MyClass>
+};
+\end{lstlisting}
+
+Выглядит странно: класс наследуется от шаблона, параметризованного
+\textit{самим собой}. Отсюда слово <<curiously>> (любопытно) в названии.
+
+\subsubsection{Ключевая идея}
+
+Базовый класс \texttt{Base<Derived>} может \textbf{вызывать методы наследника}
+на этапе компиляции, без виртуальных функций:
+
+\begin{lstlisting}
+template<typename Derived>
+class Base {
+public:
+    void interface() {
+        // Приводим this к типу наследника и вызываем его метод
+        static_cast<Derived*>(this)->implementation();
+    }
+};
+
+class Concrete : public Base<Concrete> {
+public:
+    void implementation() {
+        std::cout << "Concrete::implementation()\n";
+    }
+};
+
+int main() {
+    Concrete c;
+    c.interface();  // "Concrete::implementation()"
+}
+\end{lstlisting}
+
+\texttt{Base::interface()} вызывает \texttt{Derived::implementation()} через
+\texttt{static\_cast}. Никаких виртуальных таблиц, никаких косвенных вызовов ---
+всё разрешается \textbf{на этапе компиляции}.
+
+% -------------------------------------------------------
+\subsection{Зачем это нужно? Проблема виртуальных функций}
+
+Виртуальные функции --- стандартный механизм полиморфизма в C++. Но у них
+есть цена:
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+& \textbf{Виртуальные функции} & \textbf{CRTP} \\
+\midrule
+Полиморфизм
+    & Динамический (runtime)
+    & Статический (compile-time) \\
+\addlinespace
+Накладные расходы
+    & \texttt{vptr} + косвенный вызов через vtable
+    & Нулевые (всё инлайнится) \\
+\addlinespace
+Объект содержит \texttt{vptr}
+    & Да (+8 байт на x86-64)
+    & Нет \\
+\addlinespace
+Можно хранить в одном контейнере
+    & Да (\texttt{vector<Base*>})
+    & Нет (разные типы) \\
+\addlinespace
+Определяется в
+    & Runtime
+    & Compile-time \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+CRTP --- это \textbf{статический полиморфизм}: поведение определяется на этапе
+компиляции, а не в рантайме. Код получается таким же гибким, но \textbf{быстрее},
+потому что компилятор видит конкретные типы и может инлайнить вызовы.
+
+% -------------------------------------------------------
+\subsection{Как работает \texttt{static\_cast} в CRTP?}
+
+Центральный приём CRTP --- приведение \texttt{this} к типу наследника:
+
+\begin{lstlisting}
+template<typename Derived>
+class Base {
+public:
+    Derived& self() {
+        return static_cast<Derived&>(*this);
+    }
+    const Derived& self() const {
+        return static_cast<const Derived&>(*this);
+    }
+};
+\end{lstlisting}
+
+\textbf{Почему это безопасно?} Потому что \texttt{Base<Derived>} используется
+\textbf{только} как базовый класс для \texttt{Derived}. Объект всегда имеет тип
+\texttt{Derived} (или его наследника), поэтому \texttt{static\_cast} вниз
+по иерархии здесь корректен.
+
+\textbf{Когда это опасно?} Если кто-то нарушит контракт:
+
+\begin{lstlisting}
+class A : public Base<A> { /* ... */ };
+class B : public Base<A> { /* ... */ };  // BUG! B наследует Base<A>, а не Base<B>
+                                          // static_cast<A*>(this) в объекте B = UB
+\end{lstlisting}
+
+Защита от этой ошибки рассмотрена в разделе~\ref{sec:crtp-protection}.
+
+% -------------------------------------------------------
+\subsection{Применение 1: Статический полиморфизм}
+
+Классический пример --- интерфейс фигур без виртуальных функций.
+
+\subsubsection{С виртуальными функциями (обычный подход)}
+
+\begin{lstlisting}
+class Shape {
+public:
+    virtual ~Shape() = default;
+    virtual double area() const = 0;
+    virtual void draw() const = 0;
+};
+
+class Circle : public Shape {
+    double radius_;
+public:
+    explicit Circle(double r) : radius_(r) {}
+    double area() const override { return 3.14159 * radius_ * radius_; }
+    void draw() const override { std::cout << "Circle r=" << radius_ << "\n"; }
+};
+\end{lstlisting}
+
+\subsubsection{С CRTP (статический полиморфизм)}
+
+\begin{lstlisting}
+template<typename Derived>
+class Shape {
+public:
+    double area() const {
+        return static_cast<const Derived*>(this)->area_impl();
+    }
+    void draw() const {
+        static_cast<const Derived*>(this)->draw_impl();
+    }
+};
+
+class Circle : public Shape<Circle> {
+    double radius_;
+public:
+    explicit Circle(double r) : radius_(r) {}
+    double area_impl() const { return 3.14159 * radius_ * radius_; }
+    void draw_impl() const { std::cout << "Circle r=" << radius_ << "\n"; }
+};
+
+class Square : public Shape<Square> {
+    double side_;
+public:
+    explicit Square(double s) : side_(s) {}
+    double area_impl() const { return side_ * side_; }
+    void draw_impl() const { std::cout << "Square s=" << side_ << "\n"; }
+};
+\end{lstlisting}
+
+Использование с шаблонами вместо указателей на базовый класс:
+
+\begin{lstlisting}
+// Шаблонная функция -- принимает любую фигуру
+template<typename ShapeT>
+void print_area(const Shape<ShapeT>& shape) {
+    std::cout << "Area: " << shape.area() << "\n";
+}
+
+int main() {
+    Circle c(5.0);
+    Square s(3.0);
+
+    print_area(c);  // "Area: 78.5398"
+    print_area(s);  // "Area: 9"
+
+    c.draw();       // "Circle r=5"
+    s.draw();       // "Square s=3"
+}
+\end{lstlisting}
+
+\textbf{Что происходит при компиляции:}
+\begin{itemize}
+    \item \texttt{Shape<Circle>::area()} инлайнится: компилятор подставляет
+          \texttt{Circle::area\_impl()} напрямую.
+    \item Никакого \texttt{vptr}, никакого косвенного вызова через таблицу.
+    \item \texttt{print\_area} инстанцируется для каждого типа фигуры ---
+          получаются две отдельные, полностью оптимизированные функции.
+\end{itemize}
+
+% -------------------------------------------------------
+\subsection{Применение 2: Добавление функциональности (mixins)}
+
+CRTP позволяет базовому классу <<добавлять>> методы, которые используют
+интерфейс наследника. Это называется \textbf{mixin}.
+
+\subsubsection{Пример: автоматические операторы сравнения}
+
+До C++20 (до \texttt{operator<=>}) приходилось писать все 6 операторов вручную.
+CRTP позволяет вывести их из одного:
+
+\begin{lstlisting}
+// Mixin: требует от наследника только operator< и operator==
+template<typename Derived>
+class Comparable {
+public:
+    friend bool operator>(const Derived& a, const Derived& b) {
+        return b < a;
+    }
+    friend bool operator<=(const Derived& a, const Derived& b) {
+        return !(b < a);
+    }
+    friend bool operator>=(const Derived& a, const Derived& b) {
+        return !(a < b);
+    }
+    friend bool operator!=(const Derived& a, const Derived& b) {
+        return !(a == b);
+    }
+};
+
+class Temperature : public Comparable<Temperature> {
+    double value_;
+public:
+    explicit Temperature(double v) : value_(v) {}
+
+    // Нужно определить только два оператора:
+    friend bool operator<(const Temperature& a, const Temperature& b) {
+        return a.value_ < b.value_;
+    }
+    friend bool operator==(const Temperature& a, const Temperature& b) {
+        return a.value_ == b.value_;
+    }
+};
+
+int main() {
+    Temperature t1(36.6), t2(37.0);
+
+    std::cout << (t1 < t2) << "\n";   // 1 -- определён вручную
+    std::cout << (t1 > t2) << "\n";   // 0 -- сгенерирован CRTP
+    std::cout << (t1 <= t2) << "\n";  // 1 -- сгенерирован CRTP
+    std::cout << (t1 != t2) << "\n";  // 1 -- сгенерирован CRTP
+}
+\end{lstlisting}
+
+\textbf{Примечание:} в C++20 для этого есть \texttt{operator<=>} (spaceship operator),
+который решает ту же задачу средствами языка. Но паттерн mixin через CRTP применим
+и к другим задачам.
+
+\subsubsection{Пример: автоматический \texttt{operator!=} и постфиксный \texttt{++}}
+
+\begin{lstlisting}
+// Mixin для итераторов: из prefix ++ и == генерирует != и postfix ++
+template<typename Derived>
+class IteratorMixin {
+public:
+    // Постфиксный ++ через префиксный
+    Derived operator++(int) {
+        Derived old = static_cast<Derived&>(*this);
+        ++static_cast<Derived&>(*this);  // Вызывает prefix ++
+        return old;
+    }
+
+    friend bool operator!=(const Derived& a, const Derived& b) {
+        return !(a == b);
+    }
+};
+
+class Counter : public IteratorMixin<Counter> {
+    int value_;
+public:
+    explicit Counter(int v) : value_(v) {}
+
+    // Определяем только prefix ++ и ==
+    Counter& operator++() { ++value_; return *this; }
+
+    friend bool operator==(const Counter& a, const Counter& b) {
+        return a.value_ == b.value_;
+    }
+
+    int get() const { return value_; }
+};
+
+int main() {
+    Counter c(0);
+    Counter end(5);
+
+    while (c != end) {      // != сгенерирован CRTP
+        std::cout << c.get() << " ";
+        c++;                 // postfix ++ сгенерирован CRTP
+    }
+    // 0 1 2 3 4
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Применение 3: Подсчёт объектов}
+
+CRTP позволяет создать счётчик экземпляров, \textbf{индивидуальный для каждого
+класса}:
+
+\begin{lstlisting}
+template<typename Derived>
+class Counter {
+    static inline int count_ = 0;  // inline static (C++17)
+public:
+    Counter()  { ++count_; }
+    Counter(const Counter&) { ++count_; }
+    ~Counter() { --count_; }
+
+    static int alive() { return count_; }
+};
+
+class Dog : public Counter<Dog> {
+    std::string name_;
+public:
+    explicit Dog(std::string n) : name_(std::move(n)) {}
+};
+
+class Cat : public Counter<Cat> {
+    std::string name_;
+public:
+    explicit Cat(std::string n) : name_(std::move(n)) {}
+};
+
+int main() {
+    Dog d1("Шарик"), d2("Бобик");
+    Cat c1("Мурка");
+
+    std::cout << "Собак: " << Dog::alive() << "\n";  // 2
+    std::cout << "Кошек: " << Cat::alive() << "\n";  // 1
+
+    {
+        Dog d3("Рекс");
+        std::cout << "Собак: " << Dog::alive() << "\n";  // 3
+    }
+    std::cout << "Собак: " << Dog::alive() << "\n";  // 2
+}
+\end{lstlisting}
+
+\textbf{Почему без CRTP это не работает?}
+
+\begin{lstlisting}
+// Без CRTP: один счётчик на ВСЕ классы
+class CounterBad {
+    static inline int count_ = 0;
+public:
+    CounterBad() { ++count_; }
+    ~CounterBad() { --count_; }
+    static int alive() { return count_; }
+};
+
+class Dog : public CounterBad {};
+class Cat : public CounterBad {};
+
+// Dog::alive() и Cat::alive() -- это ОДИН И ТОТ ЖЕ счётчик!
+// Потому что Dog и Cat наследуют один и тот же CounterBad
+\end{lstlisting}
+
+С CRTP \texttt{Counter<Dog>} и \texttt{Counter<Cat>} --- это \textbf{разные классы},
+каждый со своей статической переменной \texttt{count\_}.
+
+% -------------------------------------------------------
+\subsection{Применение 4: Singleton через CRTP}
+
+\begin{lstlisting}
+template<typename Derived>
+class Singleton {
+protected:
+    Singleton() = default;
+    ~Singleton() = default;
+
+    Singleton(const Singleton&) = delete;
+    Singleton& operator=(const Singleton&) = delete;
+
+public:
+    static Derived& instance() {
+        static Derived inst;  // Meyer's singleton
+        return inst;
+    }
+};
+
+class Logger : public Singleton<Logger> {
+    friend class Singleton<Logger>;  // Даём доступ к private конструктору
+    Logger() = default;
+
+public:
+    void log(const std::string& msg) {
+        std::cout << "[LOG] " << msg << "\n";
+    }
+};
+
+class Config : public Singleton<Config> {
+    friend class Singleton<Config>;
+    Config() = default;
+
+    int port_ = 8080;
+public:
+    int port() const { return port_; }
+};
+
+int main() {
+    Logger::instance().log("started");     // "[LOG] started"
+    std::cout << Config::instance().port() << "\n";  // 8080
+
+    // Logger l;  // Ошибка компиляции! Конструктор protected
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Применение 5: Метод \texttt{clone()} без повторения кода}
+
+При глубоком наследовании каждый класс должен переопределять \texttt{clone()}
+с правильным типом. CRTP автоматизирует это:
+
+\begin{lstlisting}
+#include <memory>
+
+class Animal {
+public:
+    virtual ~Animal() = default;
+    virtual std::unique_ptr<Animal> clone() const = 0;
+    virtual void speak() const = 0;
+};
+
+// CRTP-прослойка, которая реализует clone() за наследника
+template<typename Derived>
+class Cloneable : public Animal {
+public:
+    std::unique_ptr<Animal> clone() const override {
+        // Derived ОБЯЗАН иметь копирующий конструктор
+        return std::make_unique<Derived>(
+            static_cast<const Derived&>(*this)
+        );
+    }
+};
+
+// Теперь наследникам не нужно писать clone() вручную:
+class Dog : public Cloneable<Dog> {
+    std::string name_;
+public:
+    explicit Dog(std::string n) : name_(std::move(n)) {}
+    void speak() const override {
+        std::cout << name_ << " говорит: Гав!\n";
+    }
+};
+
+class Cat : public Cloneable<Cat> {
+    std::string name_;
+public:
+    explicit Cat(std::string n) : name_(std::move(n)) {}
+    void speak() const override {
+        std::cout << name_ << " говорит: Мяу!\n";
+    }
+};
+
+int main() {
+    std::unique_ptr<Animal> dog = std::make_unique<Dog>("Шарик");
+    dog->speak();  // "Шарик говорит: Гав!"
+
+    auto cloned = dog->clone();
+    cloned->speak();  // "Шарик говорит: Гав!" -- это КОПИЯ
+}
+\end{lstlisting}
+
+Без CRTP пришлось бы копировать реализацию \texttt{clone()} в каждый класс.
+
+% -------------------------------------------------------
+\subsection{Применение 6: Статический интерфейс (<<концепты до концептов>>)}
+
+До C++20 CRTP использовали для проверки интерфейса на этапе компиляции:
+
+\begin{lstlisting}
+template<typename Derived>
+class Printable {
+public:
+    // Derived обязан иметь метод to_string()
+    friend std::ostream& operator<<(std::ostream& os, const Derived& obj) {
+        os << obj.to_string();
+        return os;
+    }
+};
+
+class Point : public Printable<Point> {
+    double x_, y_;
+public:
+    Point(double x, double y) : x_(x), y_(y) {}
+
+    std::string to_string() const {
+        return "(" + std::to_string(x_) + ", " + std::to_string(y_) + ")";
+    }
+};
+
+class Color : public Printable<Color> {
+    int r_, g_, b_;
+public:
+    Color(int r, int g, int b) : r_(r), g_(g), b_(b) {}
+
+    std::string to_string() const {
+        return "rgb(" + std::to_string(r_) + "," +
+               std::to_string(g_) + "," + std::to_string(b_) + ")";
+    }
+};
+
+int main() {
+    Point p(1.5, 2.3);
+    Color c(255, 128, 0);
+
+    std::cout << p << "\n";  // "(1.500000, 2.300000)"
+    std::cout << c << "\n";  // "rgb(255,128,0)"
+}
+\end{lstlisting}
+
+Наследник определяет \texttt{to\_string()}, а CRTP-база автоматически
+генерирует \texttt{operator<<}. Если наследник забудет определить
+\texttt{to\_string()} --- ошибка компиляции.
+
+% -------------------------------------------------------
+\subsection{Защита от ошибок}
+\label{sec:crtp-protection}
+
+\subsubsection{Проблема: неправильный шаблонный аргумент}
+
+\begin{lstlisting}
+class A : public Base<A> {};
+class B : public Base<A> {};  // Ошибка! B передал A вместо B
+                               // static_cast<A*>(this) на объекте B = UB
+\end{lstlisting}
+
+\subsubsection{Решение: проверка в конструкторе}
+
+\begin{lstlisting}
+template<typename Derived>
+class Base {
+    // Конструктор private, только Derived может вызвать (через наследование)
+    Base() = default;
+    friend Derived;  // Только Derived имеет доступ к конструктору
+public:
+    void interface() {
+        static_cast<Derived*>(this)->implementation();
+    }
+};
+
+class A : public Base<A> {};  // OK: A -- friend Base<A>
+// class B : public Base<A> {}; // Ошибка компиляции!
+                                // B не friend Base<A>, не может вызвать конструктор
+\end{lstlisting}
+
+\subsubsection{Решение C++20: \texttt{static\_assert} с концептами}
+
+\begin{lstlisting}
+template<typename Derived>
+class Base {
+public:
+    Base() {
+        // Проверяем на этапе компиляции, что Derived действительно наследник
+        static_assert(std::is_base_of_v<Base<Derived>, Derived>,
+                      "CRTP: Derived must inherit from Base<Derived>");
+    }
+};
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{CRTP и множественное наследование}
+
+Класс может наследовать \textbf{несколько} CRTP-баз --- каждая добавляет свою
+функциональность:
+
+\begin{lstlisting}
+template<typename Derived>
+class Serializable {
+public:
+    std::string serialize() const {
+        return static_cast<const Derived*>(this)->serialize_impl();
+    }
+};
+
+template<typename Derived>
+class Loggable {
+public:
+    void log(const std::string& msg) const {
+        std::cout << "[" << static_cast<const Derived*>(this)->class_name()
+                  << "] " << msg << "\n";
+    }
+};
+
+// User наследует оба mixin'а
+class User : public Serializable<User>, public Loggable<User> {
+    std::string name_;
+    int age_;
+public:
+    User(std::string name, int age) : name_(std::move(name)), age_(age) {}
+
+    // Для Serializable
+    std::string serialize_impl() const {
+        return "{\"name\":\"" + name_ + "\",\"age\":" + std::to_string(age_) + "}";
+    }
+
+    // Для Loggable
+    const char* class_name() const { return "User"; }
+};
+
+int main() {
+    User u("Alice", 25);
+    std::cout << u.serialize() << "\n";  // {"name":"Alice","age":25}
+    u.log("created");                     // [User] created
+}
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{CRTP vs виртуальные функции: когда что?}
+
+\begin{center}
+\begin{tabular}{lp{5.5cm}p{5.5cm}}
+\toprule
+\textbf{Критерий} & \textbf{Виртуальные функции} & \textbf{CRTP} \\
+\midrule
+Тип известен на этапе компиляции
+    & Не обязательно
+    & Да, всегда \\
+\addlinespace
+Нужен \texttt{vector<Base*>}
+    & Да, это единственный способ
+    & Нет (разные \texttt{Base<T>} --- разные типы) \\
+\addlinespace
+Критична производительность
+    & Косвенный вызов, нет инлайнинга
+    & Нулевые затраты, полный инлайнинг \\
+\addlinespace
+Количество типов растёт в рантайме (плагины)
+    & Подходит
+    & Не подходит \\
+\addlinespace
+Добавление общей функциональности (mixin)
+    & Неудобно
+    & Идеально \\
+\addlinespace
+Простота понимания
+    & Привычно, интуитивно
+    & Требует знания паттерна \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Правило:}
+\begin{itemize}
+    \item Если набор типов известен \textbf{на этапе компиляции} и важна
+          производительность --- CRTP.
+    \item Если нужен \textbf{runtime-полиморфизм} (контейнер разнородных объектов,
+          плагины, фабрики) --- виртуальные функции.
+    \item Если нужно \textbf{добавить поведение} к разным классам (mixin) --- CRTP.
+\end{itemize}
+
+% -------------------------------------------------------
+\subsection{Пример из реального мира: \texttt{std::enable\_shared\_from\_this}}
+
+Стандартная библиотека использует CRTP в
+\texttt{std::enable\_shared\_from\_this<T>}:
+
+\begin{lstlisting}
+#include <memory>
+
+class Widget : public std::enable_shared_from_this<Widget> {
+public:
+    std::shared_ptr<Widget> get_ptr() {
+        return shared_from_this();  // Метод из CRTP-базы
+    }
+
+    void do_work() {
+        // Безопасно создаём shared_ptr на себя
+        auto self = shared_from_this();
+        // Можно передать self в асинхронную операцию,
+        // гарантируя, что объект не будет уничтожен
+    }
+};
+
+int main() {
+    auto w = std::make_shared<Widget>();
+    auto w2 = w->get_ptr();  // w и w2 разделяют владение
+
+    std::cout << w.use_count() << "\n";  // 2
+}
+\end{lstlisting}
+
+\texttt{enable\_shared\_from\_this<Widget>} --- это CRTP-база. Она хранит
+внутри \texttt{weak\_ptr<Widget>}, который инициализируется при создании
+\texttt{shared\_ptr<Widget>}. Метод \texttt{shared\_from\_this()} возвращает
+\texttt{shared\_ptr}, созданный из этого \texttt{weak\_ptr}.
+
+% -------------------------------------------------------
+\subsection{Deducing this (C++23) --- замена CRTP?}
+
+C++23 ввёл \textbf{deducing this} --- явный объектный параметр, который
+упрощает многие сценарии, ранее требовавшие CRTP:
+
+\begin{lstlisting}
+// CRTP (до C++23):
+template<typename Derived>
+class Comparable {
+    friend bool operator!=(const Derived& a, const Derived& b) {
+        return !(a == b);
+    }
+};
+
+class Int : public Comparable<Int> {
+    int val_;
+public:
+    explicit Int(int v) : val_(v) {}
+    friend bool operator==(const Int& a, const Int& b) {
+        return a.val_ == b.val_;
+    }
+};
+\end{lstlisting}
+
+\begin{lstlisting}
+// Deducing this (C++23):
+class Comparable23 {
+    // this передаётся явно, тип выводится автоматически
+    bool operator!=(this const auto& self, const auto& other) {
+        return !(self == other);
+    }
+};
+
+class Int23 : public Comparable23 {
+    int val_;
+public:
+    explicit Int23(int v) : val_(v) {}
+    friend bool operator==(const Int23& a, const Int23& b) {
+        return a.val_ == b.val_;
+    }
+};
+\end{lstlisting}
+
+C deducing this не нужен шаблонный параметр --- компилятор сам выводит
+конкретный тип \texttt{self}. Код проще и безопаснее (нет риска передать
+неправильный тип в шаблон базы).
+
+\textbf{Однако CRTP не устарел:}
+\begin{itemize}
+    \item Deducing this доступен только с C++23
+    \item CRTP работает и для статических членов (подсчёт объектов, singleton)
+    \item Многие библиотеки и кодовые базы используют CRTP
+    \item Понимание CRTP необходимо для чтения существующего кода
+\end{itemize}
+
+% -------------------------------------------------------
+\subsection{Итого: шпаргалка по CRTP}
+
+\begin{center}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{Применение} & \textbf{Суть} \\
+\midrule
+Статический полиморфизм
+    & Вызов методов наследника без \texttt{virtual} \\
+\addlinespace
+Mixin (добавление функциональности)
+    & Генерация операторов, \texttt{operator<<}, \texttt{clone()} и~т.\,д. \\
+\addlinespace
+Подсчёт объектов
+    & Отдельный \texttt{static} счётчик для каждого класса \\
+\addlinespace
+Singleton
+    & Шаблонный \texttt{instance()} для любого класса \\
+\addlinespace
+\texttt{enable\_shared\_from\_this}
+    & Получение \texttt{shared\_ptr} на \texttt{this} \\
+\addlinespace
+Избежание дублирования
+    & Один \texttt{clone()}, один \texttt{serialize()} в базе \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}
