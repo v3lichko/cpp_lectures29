@@ -5844,4 +5844,975 @@ Singleton
 \end{tabular}
 \end{center}
 
+% =============================================================
+\section{Указатели на функции, методы, поля. Лямбды. Type erasure. \texttt{std::function}}
+% =============================================================
+
+% -------------------------------------------------------
+\subsection{Указатели на функции}
+% -------------------------------------------------------
+
+\subsubsection{Что такое указатель на функцию}
+
+Функция в~C++ занимает определённое место в~памяти (сегмент кода).
+Указатель на функцию хранит \textbf{адрес точки входа} функции и позволяет
+вызывать её косвенно --- через указатель.
+
+\begin{lstlisting}
+#include <iostream>
+
+int add(int a, int b) { return a + b; }
+int mul(int a, int b) { return a * b; }
+
+int main() {
+    // Объявление указателя на функцию int(int,int)
+    int (*op)(int, int) = nullptr;
+
+    op = add;          // имя функции неявно приводится к указателю
+    std::cout << op(2, 3) << "\n";   // 5
+
+    op = &mul;         // явное взятие адреса -- тоже допустимо
+    std::cout << op(2, 3) << "\n";   // 6
+}
+\end{lstlisting}
+
+\textbf{Синтаксис объявления:}
+
+\begin{center}
+\texttt{возвращаемый\_тип (*имя)(список\_параметров)}
+\end{center}
+
+Скобки вокруг \texttt{*имя} обязательны: без них получится объявление функции,
+возвращающей указатель.
+
+\subsubsection{Использование \texttt{typedef} и \texttt{using}}
+
+Синтаксис указателей на функции громоздкий. Упрощаем:
+
+\begin{lstlisting}
+// C-style typedef
+typedef int (*BinaryOp)(int, int);
+
+// C++11 using (предпочтительно)
+using BinaryOp = int(*)(int, int);
+
+BinaryOp op = add;
+std::cout << op(4, 5) << "\n";  // 9
+\end{lstlisting}
+
+\subsubsection{Передача указателя на функцию как параметр}
+
+\begin{lstlisting}
+void apply_and_print(int a, int b, int (*func)(int, int)) {
+    std::cout << func(a, b) << "\n";
+}
+
+// Или с using:
+using BinaryOp = int(*)(int, int);
+void apply_and_print(int a, int b, BinaryOp func) {
+    std::cout << func(a, b) << "\n";
+}
+
+int main() {
+    apply_and_print(10, 20, add);  // 30
+    apply_and_print(10, 20, mul);  // 200
+}
+\end{lstlisting}
+
+Это классический приём в~C --- callback-функции. Именно так работают
+\texttt{qsort}, \texttt{signal} и~другие C-функции.
+
+\subsubsection{Массив указателей на функции}
+
+\begin{lstlisting}
+int sub(int a, int b) { return a - b; }
+
+int main() {
+    BinaryOp ops[] = {add, mul, sub};
+    for (auto op : ops) {
+        std::cout << op(10, 3) << " ";  // 13 30 7
+    }
+}
+\end{lstlisting}
+
+\subsubsection{Указатели на функции и шаблоны}
+
+Шаблонная функция не является одной функцией --- это семейство.
+Нужно указать конкретную инстанциацию:
+
+\begin{lstlisting}
+template<typename T>
+T maximum(T a, T b) { return a > b ? a : b; }
+
+int main() {
+    int (*p)(int, int) = maximum<int>;     // OK: конкретная инстанциация
+    // int (*q)(int, int) = maximum;       // Ошибка: какая именно?
+    std::cout << p(3, 7) << "\n";          // 7
+}
+\end{lstlisting}
+
+\subsubsection{Указатели на \texttt{noexcept}-функции (C++17)}
+
+С C++17 \texttt{noexcept} является частью типа функции:
+
+\begin{lstlisting}
+void foo() noexcept {}
+void bar() {}
+
+void (*p1)() noexcept = foo;   // OK
+void (*p2)()          = foo;   // OK: noexcept -> обычный (неявное приведение)
+// void (*p3)() noexcept = bar; // Ошибка: обычный -> noexcept нельзя
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Указатели на методы (member function pointers)}
+% -------------------------------------------------------
+
+\subsubsection{Синтаксис}
+
+Методы класса --- это \textbf{не обычные функции}. Они принимают скрытый
+параметр \texttt{this}. Поэтому обычный указатель на функцию для них
+\textbf{не подходит}:
+
+\begin{lstlisting}
+struct Calculator {
+    int add(int a, int b) { return a + b; }
+    int mul(int a, int b) { return a * b; }
+};
+
+int main() {
+    // Тип: указатель на метод Calculator, принимающий (int,int), вернущий int
+    int (Calculator::*method)(int, int) = &Calculator::add;
+
+    Calculator calc;
+    // Вызов через объект:
+    std::cout << (calc.*method)(2, 3) << "\n";   // 5
+
+    // Вызов через указатель на объект:
+    Calculator* ptr = &calc;
+    std::cout << (ptr->*method)(2, 3) << "\n";   // 5
+
+    method = &Calculator::mul;
+    std::cout << (calc.*method)(2, 3) << "\n";   // 6
+}
+\end{lstlisting}
+
+\textbf{Важно:} оператор \texttt{\&} при взятии адреса метода \textbf{обязателен}
+(в~отличие от обычных функций, где имя неявно конвертируется в~указатель).
+
+\subsubsection{Синтаксис с \texttt{using}}
+
+\begin{lstlisting}
+using CalcMethod = int (Calculator::*)(int, int);
+CalcMethod m = &Calculator::add;
+\end{lstlisting}
+
+\subsubsection{Указатели на \texttt{const}-методы}
+
+\begin{lstlisting}
+struct Foo {
+    int value() const { return 42; }
+};
+
+// Обратите внимание на const:
+int (Foo::*p)() const = &Foo::value;
+
+const Foo f;
+std::cout << (f.*p)() << "\n";  // 42
+\end{lstlisting}
+
+\subsubsection{Указатели на статические методы}
+
+Статические методы \textbf{не имеют} \texttt{this}, поэтому для них используется
+\textbf{обычный} указатель на функцию:
+
+\begin{lstlisting}
+struct Utils {
+    static int square(int x) { return x * x; }
+};
+
+int (*p)(int) = &Utils::square;  // обычный указатель на функцию!
+std::cout << p(5) << "\n";       // 25
+\end{lstlisting}
+
+\subsubsection{Использование \texttt{std::invoke} (C++17)}
+
+Операторы \texttt{.*} и~\texttt{->*} неудобны. \texttt{std::invoke}
+унифицирует вызов любого callable-объекта:
+
+\begin{lstlisting}
+#include <functional>
+
+Calculator calc;
+auto method = &Calculator::add;
+
+// Вместо (calc.*method)(2, 3):
+std::cout << std::invoke(method, calc, 2, 3) << "\n";  // 5
+
+// Работает и с указателем на объект:
+std::cout << std::invoke(method, &calc, 2, 3) << "\n"; // 5
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Указатели на поля (pointer to data member)}
+% -------------------------------------------------------
+
+\subsubsection{Синтаксис}
+
+Можно взять <<адрес>> поля класса. На самом деле это не настоящий адрес,
+а~\textbf{смещение} поля относительно начала объекта:
+
+\begin{lstlisting}
+struct Point {
+    double x;
+    double y;
+    double z;
+};
+
+int main() {
+    // Указатель на поле типа double класса Point
+    double Point::*coord = &Point::x;
+
+    Point p{1.0, 2.0, 3.0};
+
+    std::cout << p.*coord << "\n";    // 1.0 (x)
+
+    coord = &Point::y;
+    std::cout << p.*coord << "\n";    // 2.0 (y)
+
+    coord = &Point::z;
+    std::cout << p.*coord << "\n";    // 3.0 (z)
+}
+\end{lstlisting}
+
+\subsubsection{Практическое применение: обобщённый доступ}
+
+\begin{lstlisting}
+struct Student {
+    std::string name;
+    int age;
+    double gpa;
+};
+
+// Функция, сортирующая по любому полю:
+template<typename T>
+void sort_by(std::vector<Student>& v, T Student::*field) {
+    std::sort(v.begin(), v.end(),
+        [field](const Student& a, const Student& b) {
+            return a.*field < b.*field;
+        });
+}
+
+int main() {
+    std::vector<Student> students = {
+        {"Alice", 20, 3.8},
+        {"Bob",   22, 3.5},
+        {"Carol", 19, 3.9}
+    };
+
+    sort_by(students, &Student::age);   // по возрасту
+    sort_by(students, &Student::gpa);   // по GPA
+    sort_by(students, &Student::name);  // по имени
+}
+\end{lstlisting}
+
+\subsubsection{Доступ через \texttt{std::invoke}}
+
+\texttt{std::invoke} работает и с указателями на поля:
+
+\begin{lstlisting}
+Student s{"Alice", 20, 3.8};
+auto ptr = &Student::name;
+std::cout << std::invoke(ptr, s) << "\n";  // "Alice"
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Лямбда-выражения}
+% -------------------------------------------------------
+
+\subsubsection{Мотивация}
+
+До C++11 для передачи <<кусочка логики>> в~алгоритм нужно было писать
+отдельную функцию или функтор (класс с~\texttt{operator()}):
+
+\begin{lstlisting}
+// Функтор -- класс с operator()
+struct IsEven {
+    bool operator()(int x) const { return x % 2 == 0; }
+};
+
+std::vector<int> v = {1, 2, 3, 4, 5, 6};
+auto it = std::find_if(v.begin(), v.end(), IsEven{});
+\end{lstlisting}
+
+Это слишком многословно для простой проверки. Лямбды решают эту проблему.
+
+\subsubsection{Базовый синтаксис}
+
+\begin{lstlisting}
+auto it = std::find_if(v.begin(), v.end(),
+    [](int x) { return x % 2 == 0; });
+\end{lstlisting}
+
+Общий вид лямбда-выражения:
+
+\begin{center}
+\texttt{[захват](параметры) спецификаторы -> тип\_возврата \{ тело \}}
+\end{center}
+
+\begin{itemize}
+    \item \texttt{[захват]} --- какие переменные из окружающего контекста доступны внутри лямбды;
+    \item \texttt{(параметры)} --- как у обычной функции;
+    \item \texttt{спецификаторы} --- \texttt{mutable}, \texttt{noexcept}, \texttt{constexpr} и~др.;
+    \item \texttt{-> тип\_возврата} --- можно опустить, если компилятор выведет сам;
+    \item \texttt{\{ тело \}} --- код лямбды.
+\end{itemize}
+
+\subsubsection{Что такое лямбда на самом деле?}
+
+Лямбда --- это \textbf{синтаксический сахар} для создания анонимного класса
+с~\texttt{operator()}. Компилятор генерирует примерно следующее:
+
+\begin{lstlisting}
+// Лямбда:
+auto f = [](int x) { return x * 2; };
+
+// Компилятор генерирует что-то вроде:
+class __lambda_1 {
+public:
+    int operator()(int x) const {  // const по умолчанию!
+        return x * 2;
+    }
+};
+auto f = __lambda_1{};
+\end{lstlisting}
+
+Каждая лямбда имеет \textbf{уникальный тип}, даже если тело идентично:
+
+\begin{lstlisting}
+auto f1 = [](int x) { return x; };
+auto f2 = [](int x) { return x; };
+// decltype(f1) != decltype(f2) -- это разные типы!
+\end{lstlisting}
+
+\subsubsection{Захват переменных (capture)}
+
+\paragraph{\texttt{[]} --- без захвата.} Лямбда не видит локальные переменные:
+
+\begin{lstlisting}
+int threshold = 10;
+// auto f = [](int x) { return x > threshold; }; // Ошибка!
+\end{lstlisting}
+
+\paragraph{\texttt{[=]} --- захват всех по значению (копия).}
+
+\begin{lstlisting}
+int threshold = 10;
+auto f = [=](int x) { return x > threshold; };
+// threshold скопирован внутрь лямбды
+threshold = 100;       // не повлияет на f
+std::cout << f(50);    // true (сравнивается с 10)
+\end{lstlisting}
+
+\paragraph{\texttt{[\&]} --- захват всех по ссылке.}
+
+\begin{lstlisting}
+int count = 0;
+auto increment = [&]() { ++count; };
+increment();
+increment();
+std::cout << count;  // 2
+\end{lstlisting}
+
+\textbf{Осторожно:} захваченная ссылка может стать висячей!
+
+\begin{lstlisting}
+std::function<int()> make_counter() {
+    int n = 0;
+    return [&n]() { return ++n; };  // ОШИБКА: n уничтожен при выходе!
+}
+\end{lstlisting}
+
+\paragraph{Поимённый захват.}
+
+\begin{lstlisting}
+int a = 1, b = 2, c = 3;
+auto f = [a, &b](int x) {
+    // a -- копия (read-only, т.к. operator() const)
+    // b -- ссылка (можно менять)
+    // c -- не захвачен, не доступен
+    b += a + x;
+};
+\end{lstlisting}
+
+\paragraph{Смешанный захват.}
+
+\begin{lstlisting}
+auto f = [=, &b]() { ... };  // все по значению, b по ссылке
+auto g = [&, a]() { ... };   // все по ссылке, a по значению
+\end{lstlisting}
+
+\subsubsection{Захват \texttt{this}}
+
+Внутри метода класса лямбда может захватить \texttt{this}:
+
+\begin{lstlisting}
+class Timer {
+    int interval_ = 100;
+public:
+    auto make_callback() {
+        // [this] -- захват указателя this
+        return [this]() {
+            std::cout << "interval = " << interval_ << "\n";
+        };
+    }
+
+    auto make_safe_callback() {
+        // [*this] (C++17) -- захват копии всего объекта
+        return [*this]() {
+            std::cout << "interval = " << interval_ << "\n";
+        };
+    }
+};
+\end{lstlisting}
+
+\texttt{[this]} --- захватывает \textbf{указатель}. Если объект уничтожен, будет
+dangling pointer.
+
+\texttt{[*this]} (C++17) --- захватывает \textbf{копию} объекта. Безопасно,
+но дорого для больших объектов.
+
+\subsubsection{Init-capture (обобщённый захват, C++14)}
+
+Позволяет создать новую переменную внутри захвата:
+
+\begin{lstlisting}
+// Переместить вектор в лямбду (а не копировать):
+std::vector<int> data = {1, 2, 3, 4, 5};
+auto f = [data = std::move(data)]() {
+    for (int x : data) std::cout << x << " ";
+};
+// data здесь пуст -- он перемещён в лямбду
+
+// Захват с переименованием:
+int x = 42;
+auto g = [value = x * 2]() { return value; };  // value == 84
+
+// Захват unique_ptr (некопируемый тип):
+auto ptr = std::make_unique<int>(42);
+auto h = [p = std::move(ptr)]() { return *p; };
+\end{lstlisting}
+
+\subsubsection{Ключевое слово \texttt{mutable}}
+
+По умолчанию \texttt{operator()} лямбды --- \texttt{const}. Чтобы изменять
+захваченные по значению переменные, нужен \texttt{mutable}:
+
+\begin{lstlisting}
+int counter = 0;
+auto inc = [counter]() mutable {
+    return ++counter;  // OK: mutable позволяет менять копию
+};
+std::cout << inc() << "\n";  // 1
+std::cout << inc() << "\n";  // 2
+std::cout << counter << "\n"; // 0 -- оригинал не изменён!
+\end{lstlisting}
+
+Без \texttt{mutable}:
+
+\begin{lstlisting}
+auto bad = [counter]() {
+    // return ++counter;  // Ошибка: operator() const
+};
+\end{lstlisting}
+
+\subsubsection{Лямбда без захвата конвертируется в указатель на функцию}
+
+Лямбда \textbf{без захвата} может быть неявно преобразована в~указатель
+на~функцию с~подходящей сигнатурой:
+
+\begin{lstlisting}
+int (*fp)(int, int) = [](int a, int b) { return a + b; };
+std::cout << fp(3, 4) << "\n";  // 7
+
+// Это позволяет передавать лямбды в C API:
+void c_api(void (*callback)(int)) { callback(42); }
+c_api([](int x) { std::cout << x << "\n"; });  // OK
+\end{lstlisting}
+
+Лямбда \textbf{с~захватом} в~указатель на функцию \textbf{не конвертируется}:
+
+\begin{lstlisting}
+int offset = 10;
+// int (*fp)(int) = [offset](int x) { return x + offset; }; // Ошибка!
+\end{lstlisting}
+
+\subsubsection{Generic-лямбды (C++14)}
+
+Параметры лямбды можно объявить как \texttt{auto} --- компилятор сделает
+шаблонный \texttt{operator()}:
+
+\begin{lstlisting}
+auto print = [](const auto& x) {
+    std::cout << x << "\n";
+};
+print(42);            // int
+print(3.14);          // double
+print("hello"s);      // std::string
+\end{lstlisting}
+
+Что генерирует компилятор:
+
+\begin{lstlisting}
+class __lambda {
+public:
+    template<typename T>
+    void operator()(const T& x) const {
+        std::cout << x << "\n";
+    }
+};
+\end{lstlisting}
+
+\subsubsection{Шаблонные лямбды (C++20)}
+
+C++20 позволяет явно указать шаблонные параметры:
+
+\begin{lstlisting}
+// Ограничение: только целочисленные типы
+auto sum = []<typename T>(const std::vector<T>& v) requires std::integral<T> {
+    T result = 0;
+    for (auto x : v) result += x;
+    return result;
+};
+
+std::vector<int> vi = {1, 2, 3};
+std::cout << sum(vi) << "\n";  // 6
+
+// std::vector<double> vd = {1.0, 2.0};
+// sum(vd);  // Ошибка: double не integral
+\end{lstlisting>
+
+\subsubsection{Рекурсивные лямбды}
+
+Лямбда не может вызвать саму себя напрямую, потому что \texttt{auto}
+ещё не выведен в~момент определения тела. Решения:
+
+\begin{lstlisting}
+// 1. Через std::function (с накладными расходами):
+std::function<int(int)> factorial = [&factorial](int n) -> int {
+    return n <= 1 ? 1 : n * factorial(n - 1);
+};
+
+// 2. Передача самой себя как параметра (без накладных расходов):
+auto factorial2 = [](auto self, int n) -> int {
+    return n <= 1 ? 1 : n * self(self, n - 1);
+};
+std::cout << factorial2(factorial2, 5) << "\n";  // 120
+
+// 3. C++23: deducing this
+auto factorial3 = [](this auto self, int n) -> int {
+    return n <= 1 ? 1 : n * self(n - 1);
+};
+\end{lstlisting}
+
+\subsubsection{Immediately Invoked Lambda Expression (IILE)}
+
+Лямбду можно вызвать сразу на месте --- удобно для инициализации
+сложных \texttt{const}-переменных:
+
+\begin{lstlisting}
+const auto config = [&]() {
+    Config c;
+    c.width = parse_int(argv[1]);
+    c.height = parse_int(argv[2]);
+    c.fullscreen = (argc > 3);
+    return c;
+}();  // <-- вызов на месте!
+// config -- const, инициализирован один раз
+\end{lstlisting}
+
+% -------------------------------------------------------
+\subsection{Указатели на функции, функторы и лямбды --- сравнение}
+% -------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{l c c c}
+\toprule
+\textbf{Свойство} & \textbf{Указатель} & \textbf{Функтор} & \textbf{Лямбда} \\
+\midrule
+Состояние (захват) & Нет & Да & Да \\
+\texttt{inline}-оптимизация & Нет\footnote{Компилятор может, но обычно не инлайнит вызов через указатель.} & Да & Да \\
+Передача в C~API & Да & Нет & Только без захвата \\
+Тип известен & Да & Да & Нет\footnote{Тип уникален и неименуем, нужен \texttt{auto} или \texttt{std::function}.} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\subsection{Type erasure (стирание типа)}
+% -------------------------------------------------------
+
+\subsubsection{Проблема}
+
+Мы хотим хранить callable-объекты разных типов в~одном контейнере
+или передавать их через единый интерфейс. Но:
+
+\begin{itemize}
+    \item Указатели на функции не хранят состояние.
+    \item Каждая лямбда --- уникальный тип, нельзя положить в~один \texttt{std::vector}.
+    \item Шаблоны --- compile-time решение, а нам нужен runtime полиморфизм.
+\end{itemize}
+
+\begin{lstlisting}
+auto f = [x=1](int a) { return a + x; };
+auto g = [y=2](int a) { return a * y; };
+// decltype(f) != decltype(g)
+
+// std::vector<???> funcs = {f, g};  // Какой тип указать?
+\end{lstlisting}
+
+\subsubsection{Идея type erasure}
+
+\textbf{Type erasure} --- техника, позволяющая <<стереть>> конкретный тип объекта,
+сохранив возможность вызывать его операции через единый интерфейс.
+Это runtime-полиморфизм \textbf{без} наследования пользователем от базового класса.
+
+Концептуально type erasure состоит из трёх компонентов:
+
+\begin{enumerate}
+    \item \textbf{Внешний класс} (wrapper) --- то, с чем работает пользователь.
+          Имеет value-семантику (копируется, перемещается).
+    \item \textbf{Внутренний абстрактный интерфейс} --- определяет набор операций.
+    \item \textbf{Шаблонная реализация} --- конкретная обёртка вокруг
+          пользовательского типа, реализующая интерфейс.
+\end{enumerate}
+
+\subsubsection{Пример: собственный \texttt{AnyCallable}}
+
+Реализуем упрощённый аналог \texttt{std::function<int(int)>}:
+
+\begin{lstlisting}
+class AnyCallable {
+    // Шаг 1: абстрактный интерфейс
+    struct Concept {
+        virtual int call(int) = 0;
+        virtual ~Concept() = default;
+        virtual std::unique_ptr<Concept> clone() const = 0;
+    };
+
+    // Шаг 2: шаблонная реализация для любого callable
+    template<typename F>
+    struct Model : Concept {
+        F func_;
+        Model(F f) : func_(std::move(f)) {}
+        int call(int x) override { return func_(x); }
+        std::unique_ptr<Concept> clone() const override {
+            return std::make_unique<Model>(func_);
+        }
+    };
+
+    // Шаг 3: хранение через указатель на базу
+    std::unique_ptr<Concept> ptr_;
+
+public:
+    // Шаблонный конструктор -- принимает что угодно callable
+    template<typename F>
+    AnyCallable(F f) : ptr_(std::make_unique<Model<F>>(std::move(f))) {}
+
+    // Копирование (через clone)
+    AnyCallable(const AnyCallable& other) : ptr_(other.ptr_->clone()) {}
+    AnyCallable& operator=(const AnyCallable& other) {
+        ptr_ = other.ptr_->clone();
+        return *this;
+    }
+
+    // Перемещение
+    AnyCallable(AnyCallable&&) = default;
+    AnyCallable& operator=(AnyCallable&&) = default;
+
+    // Вызов
+    int operator()(int x) { return ptr_->call(x); }
+};
+
+int main() {
+    AnyCallable f = [x=1](int a) { return a + x; };
+    AnyCallable g = [y=2](int a) { return a * y; };
+
+    std::vector<AnyCallable> funcs = {f, g};
+    for (auto& func : funcs) {
+        std::cout << func(10) << " ";  // 11 20
+    }
+}
+\end{lstlisting}
+
+\subsubsection{Как это работает (диаграмма)}
+
+\begin{verbatim}
+AnyCallable                     Concept (abstract)
++-------------------+          +------------------+
+| unique_ptr<Concept> ptr_ --> | virtual call()   |
++-------------------+          | virtual clone()  |
+                               +------------------+
+                                    ^         ^
+                                   /           \
+                        Model<Lambda1>    Model<Lambda2>
+                        +-----------+     +-----------+
+                        | Lambda1 f |     | Lambda2 f |
+                        | call() {  |     | call() {  |
+                        |  f(x)     |     |  f(x)     |
+                        | }         |     | }         |
+                        +-----------+     +-----------+
+\end{verbatim}
+
+Ключевая идея: шаблонный конструктор \texttt{AnyCallable(F f)} <<стирает>> тип
+\texttt{F}, оборачивая его в~\texttt{Model<F>}, а~хранит указатель на~нешаблонный
+\texttt{Concept}.
+
+\subsubsection{Type erasure в стандартной библиотеке}
+
+Type erasure --- не экзотика. Стандартная библиотека активно его использует:
+
+\begin{center}
+\begin{tabular}{l l}
+\toprule
+\textbf{Класс} & \textbf{Что стирает} \\
+\midrule
+\texttt{std::function<R(Args...)>} & Любой callable с подходящей сигнатурой \\
+\texttt{std::any} (C++17)          & Любой копируемый тип \\
+\texttt{std::move\_only\_function} (C++23) & Любой move-only callable \\
+\texttt{std::format\_args}         & Аргументы форматирования \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -------------------------------------------------------
+\subsection{\texttt{std::function}}
+% -------------------------------------------------------
+
+\subsubsection{Что это}
+
+\texttt{std::function<R(Args...)>} --- обёртка из \texttt{<functional>},
+которая может хранить \textbf{любой} вызываемый объект с~подходящей сигнатурой:
+
+\begin{itemize}
+    \item обычную функцию;
+    \item лямбду (в~том числе с~захватом);
+    \item функтор (объект с~\texttt{operator()});
+    \item указатель на метод (через \texttt{std::bind} или лямбду);
+    \item результат \texttt{std::bind}.
+\end{itemize}
+
+\begin{lstlisting}
+#include <functional>
+
+int add(int a, int b) { return a + b; }
+
+struct Multiplier {
+    int factor;
+    int operator()(int x) const { return x * factor; }
+};
+
+int main() {
+    // Хранит обычную функцию
+    std::function<int(int, int)> f1 = add;
+    std::cout << f1(2, 3) << "\n";       // 5
+
+    // Хранит лямбду с захватом
+    int offset = 10;
+    std::function<int(int)> f2 = [offset](int x) { return x + offset; };
+    std::cout << f2(5) << "\n";          // 15
+
+    // Хранит функтор
+    std::function<int(int)> f3 = Multiplier{3};
+    std::cout << f3(7) << "\n";          // 21
+}
+\end{lstlisting}
+
+\subsubsection{Проверка на пустоту}
+
+\texttt{std::function} может быть пустой (не содержать callable):
+
+\begin{lstlisting}
+std::function<void()> f;       // пустая
+if (f) {                        // проверка на непустоту
+    f();
+} else {
+    std::cout << "empty!\n";   // сюда попадём
+}
+
+f = []() { std::cout << "hello\n"; };
+if (f) f();                    // "hello"
+
+f = nullptr;                   // снова пустая
+// f();                        // выбросит std::bad_function_call!
+\end{lstlisting}
+
+\subsubsection{Накладные расходы \texttt{std::function}}
+
+\texttt{std::function} использует type erasure внутри, что влечёт расходы:
+
+\begin{enumerate}
+    \item \textbf{Динамическая аллокация.} Если callable не помещается в~SBO
+          (Small Buffer Optimization, обычно 16--32~байт), выделяется память в~куче.
+    \item \textbf{Виртуальный вызов.} Каждый \texttt{operator()} --- это косвенный
+          вызов через vtable (не инлайнится).
+    \item \textbf{Копирование.} При копировании \texttt{std::function} копируется
+          и~хранимый callable.
+\end{enumerate}
+
+\textbf{Когда это важно:}
+
+\begin{lstlisting}
+// Плохо: std::function в hot loop
+void process(const std::vector<int>& data,
+             std::function<int(int)> transform) {  // type erasure
+    for (int x : data)
+        result.push_back(transform(x));  // косвенный вызов на каждой итерации
+}
+
+// Лучше: шаблонный параметр (zero-cost)
+template<typename F>
+void process(const std::vector<int>& data, F transform) {
+    for (int x : data)
+        result.push_back(transform(x));  // прямой вызов, инлайнится
+}
+\end{lstlisting}
+
+\textbf{Правило:} используйте \texttt{std::function}, когда вам \textbf{нужно хранить}
+callable (в~поле класса, в~контейнере, в~callback). Для \textbf{передачи}
+callable в~функцию предпочитайте шаблоны.
+
+\subsubsection{Хранение указателей на методы}
+
+\begin{lstlisting}
+struct Greeter {
+    std::string name;
+    void hello() const {
+        std::cout << "Hello, " << name << "!\n";
+    }
+    void hello_n(int n) const {
+        for (int i = 0; i < n; ++i)
+            std::cout << "Hello, " << name << "!\n";
+    }
+};
+
+// Метод без аргументов: первый аргумент -- объект
+std::function<void(const Greeter&)> f = &Greeter::hello;
+Greeter g{"Alice"};
+f(g);  // "Hello, Alice!"
+
+// Метод с аргументами:
+std::function<void(const Greeter&, int)> f2 = &Greeter::hello_n;
+f2(g, 3);  // три раза "Hello, Alice!"
+
+// Привязка объекта через лямбду:
+Greeter bob{"Bob"};
+std::function<void()> f3 = [&bob]() { bob.hello(); };
+f3();  // "Hello, Bob!"
+\end{lstlisting}
+
+\subsubsection{\texttt{std::move\_only\_function} (C++23)}
+
+\texttt{std::function} требует, чтобы хранимый callable был \textbf{копируемым}.
+Это не работает с~\texttt{unique\_ptr} в~захвате:
+
+\begin{lstlisting}
+auto ptr = std::make_unique<int>(42);
+// std::function<int()> f = [p = std::move(ptr)]() { return *p; };
+// Ошибка: лямбда некопируемая!
+\end{lstlisting}
+
+C++23 вводит \texttt{std::move\_only\_function} --- аналог, который
+перемещается, но не копируется:
+
+\begin{lstlisting}
+#include <functional>
+
+auto ptr = std::make_unique<int>(42);
+std::move_only_function<int()> f = [p = std::move(ptr)]() { return *p; };
+std::cout << f() << "\n";  // 42
+// auto g = f;  // Ошибка: нельзя копировать
+auto g = std::move(f);     // OK: перемещение
+\end{lstlisting}
+
+\subsubsection{Пример: система событий (observer pattern)}
+
+\begin{lstlisting}
+#include <functional>
+#include <vector>
+#include <string>
+
+class EventBus {
+    std::unordered_map<std::string,
+        std::vector<std::function<void(const std::string&)>>> handlers_;
+public:
+    void subscribe(const std::string& event,
+                   std::function<void(const std::string&)> handler) {
+        handlers_[event].push_back(std::move(handler));
+    }
+
+    void emit(const std::string& event, const std::string& data) {
+        if (auto it = handlers_.find(event); it != handlers_.end()) {
+            for (auto& handler : it->second) {
+                handler(data);
+            }
+        }
+    }
+};
+
+int main() {
+    EventBus bus;
+
+    bus.subscribe("click", [](const std::string& data) {
+        std::cout << "Button clicked: " << data << "\n";
+    });
+
+    bus.subscribe("click", [](const std::string& data) {
+        std::cout << "Logging click: " << data << "\n";
+    });
+
+    bus.subscribe("keypress", [](const std::string& data) {
+        std::cout << "Key pressed: " << data << "\n";
+    });
+
+    bus.emit("click", "OK");
+    // Button clicked: OK
+    // Logging click: OK
+
+    bus.emit("keypress", "Enter");
+    // Key pressed: Enter
+}
+\end{lstlisting}
+
+\subsection{Итого}
+
+\begin{center}
+\begin{tabular}{l p{10cm}}
+\toprule
+\textbf{Механизм} & \textbf{Когда использовать} \\
+\midrule
+Указатель на функцию & Взаимодействие с~C~API; compile-time dispatch таблицы \\
+\addlinespace
+Указатель на метод & Обобщённый вызов методов; reflection-подобные паттерны \\
+\addlinespace
+Указатель на поле & Обобщённый доступ к~полям; сортировка по полю \\
+\addlinespace
+Лямбда + \texttt{auto}/шаблон & Передача логики в~алгоритмы; zero-cost абстракция \\
+\addlinespace
+\texttt{std::function} & Хранение callback'ов; runtime полиморфизм callable \\
+\addlinespace
+Type erasure (свой) & Когда нужен runtime полиморфизм без навязывания базового класса \\
+\bottomrule
+\end{tabular}
+\end{center}
+\section{move-семантика в C++ , value categories}
+В языке с++ мы с вами чего уже знаем про storage duration и че то там еще
+У каждого выражения есть своя категория и есть иерархии категорий
+expression -> rvalue ->xvalue , prvalue
+|
+glvalue -> lvalue , xvalue
+Объект — это именованная или идентифицируемая область памяти, хранящая данные, а lvalue (locator value) — это выражение, ссылающееся на этот объект. Lvalue указывает на конкретное местоположение в памяти (адрес), что позволяет использовать его в левой части оператора присваивания. 
+
+
+
 \end{document}
