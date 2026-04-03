@@ -1,9 +1,13 @@
 \documentclass[a4paper,12pt]{article}
-\usepackage[T2A]{fontenc}
-\usepackage[utf8]{inputenc}
-\usepackage[russian]{babel}
+\usepackage{fontspec}
+\setmainfont{PT Serif}
+\setsansfont{PT Sans}
+\setmonofont{PT Mono}
+\usepackage{polyglossia}
+\setdefaultlanguage{russian}
+\setotherlanguage{english}
 \usepackage{graphicx}
-\usepackage{listingsutf8}   % UTF-8 в lstlisting (вместо listings)
+\usepackage{listings}
 \usepackage{xcolor}
 \usepackage{geometry}
 \usepackage{hyperref}
@@ -22,8 +26,6 @@
 
 \lstset{
     language=C++,
-    inputencoding=utf8,
-    extendedchars=true,
     basicstyle=\ttfamily\small,
     keywordstyle=\color{blue}\bfseries,
     commentstyle=\color{gray}\itshape,
