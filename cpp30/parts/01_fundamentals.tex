@@ -1,0 +1,1061 @@
+% =======================================================
+% ФУНДАМЕНТАЛЬНЫЕ ТЕМЫ
+% =======================================================
+
+\section{Встроенные типы данных, представление чисел в памяти, строки}
+
+% -------------------------------------------------------
+\subsection{Фундаментальные типы}
+
+В C++ есть набор \textbf{встроенных (фундаментальных) типов}, которые понимает
+сам компилятор без подключения заголовков:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Категория} & \textbf{Типы} & \textbf{Назначение} \\
+\midrule
+Целочисленные & \texttt{char}, \texttt{short}, \texttt{int}, \texttt{long}, \texttt{long long} & целые числа \\
+\addlinespace
+Беззнаковые & \texttt{unsigned char}, \dots, \texttt{unsigned long long} & неотрицательные целые \\
+\addlinespace
+С плавающей точкой & \texttt{float}, \texttt{double}, \texttt{long double} & вещественные числа \\
+\addlinespace
+Логический & \texttt{bool} & \texttt{true} / \texttt{false} \\
+\addlinespace
+Символьный & \texttt{char}, \texttt{wchar\_t}, \texttt{char8\_t}, \texttt{char16\_t}, \texttt{char32\_t} & символы \\
+\addlinespace
+Пустой & \texttt{void} & отсутствие значения \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Размеры типов не фиксированы стандартом}
+
+Стандарт C++ гарантирует только \textbf{минимальные} размеры и соотношения, а не
+точные значения в байтах:
+
+\[
+\texttt{sizeof(char)} = 1 \le \texttt{sizeof(short)} \le \texttt{sizeof(int)}
+\le \texttt{sizeof(long)} \le \texttt{sizeof(long long)}
+\]
+
+Гарантируется: \texttt{char} $\ge 8$ бит, \texttt{short} и \texttt{int} $\ge 16$ бит,
+\texttt{long} $\ge 32$ бит, \texttt{long long} $\ge 64$ бит. По стандарту
+\texttt{sizeof(char) == 1} \textit{всегда} (это единица измерения размеров).
+
+\begin{lstlisting}
+#include <cstdint>
+// Типы с фиксированной шириной (если нужен точный размер):
+int8_t   a;   // ровно 8 бит
+int32_t  b;   // ровно 32 бита
+uint64_t c;   // ровно 64 бита, беззнаковый
+intptr_t d;   // целое, в которое влезает указатель
+\end{lstlisting}
+
+\subsection{Представление целых чисел в памяти}
+
+\subsubsection{Беззнаковые числа}
+
+Беззнаковое число хранится как обычное двоичное представление. Для $n$ бит
+диапазон значений: $[0,\ 2^n - 1]$.
+
+\begin{lstlisting}[numbers=none]
+uint8_t x = 200;   //  1100 1000  = 128 + 64 + 8 = 200
+\end{lstlisting}
+
+При переполнении беззнаковые числа работают \textbf{по модулю} $2^n$ — это
+определённое поведение (wrap-around):
+
+\begin{lstlisting}
+uint8_t x = 255;
+x = x + 1;   // 0 (256 mod 256), НЕ undefined behavior
+\end{lstlisting}
+
+\subsubsection{Знаковые числа: дополнительный код (two's complement)}
+
+Отрицательные числа хранятся в \textbf{дополнительном коде}. Старший бит ---
+знаковый. Чтобы получить представление $-x$: инвертируем все биты $x$ и
+прибавляем 1.
+
+\begin{lstlisting}[numbers=none]
+int8_t  5  =  0000 0101
+int8_t -5  =  1111 1011   (инверсия 5 -> 1111 1010, +1 -> 1111 1011)
+\end{lstlisting}
+
+Преимущество дополнительного кода: сложение знаковых и беззнаковых чисел
+выполняется \textbf{одной и той же} аппаратной операцией, и существует ровно один
+ноль. Диапазон для $n$ бит: $[-2^{n-1},\ 2^{n-1} - 1]$ (отрицательных значений на
+одно больше).
+
+\textbf{Важно:} переполнение \textit{знакового} целого --- это
+undefined behavior (UB), в отличие от беззнакового.
+
+\subsubsection{Порядок байтов (endianness)}
+
+Многобайтовое число можно хранить от младшего байта к старшему (little-endian,
+x86) или наоборот (big-endian, сеть):
+
+\begin{lstlisting}[numbers=none]
+uint32_t x = 0x12345678;
+// little-endian в памяти:  78 56 34 12
+// big-endian    в памяти:  12 34 56 78
+\end{lstlisting}
+
+\subsection{Числа с плавающей точкой (IEEE 754)}
+
+\texttt{float} (32 бита) и \texttt{double} (64 бита) хранятся по стандарту
+IEEE~754: знак, экспонента (смещённый порядок) и мантисса.
+
+\[
+\text{значение} = (-1)^{\text{знак}} \times 1.\text{мантисса} \times 2^{\text{экспонента} - \text{смещение}}
+\]
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Тип} & \textbf{Знак} & \textbf{Экспонента} & \textbf{Мантисса} \\
+\midrule
+\texttt{float}  & 1 бит & 8 бит  & 23 бита \\
+\texttt{double} & 1 бит & 11 бит & 52 бита \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Следствия:}
+\begin{itemize}[leftmargin=2em]
+    \item Не все числа представимы точно: \texttt{0.1 + 0.2 != 0.3}.
+    \item Сравнивать вещественные через \texttt{==} опасно --- нужно сравнивать
+          с допуском (epsilon).
+    \item Есть специальные значения: \texttt{+inf}, \texttt{-inf}, \texttt{NaN}
+          (причём \texttt{NaN != NaN}).
+\end{itemize}
+
+\begin{lstlisting}
+#include <cmath>
+bool almost_equal(double a, double b, double eps = 1e-9) {
+    return std::fabs(a - b) < eps;
+}
+\end{lstlisting}
+
+\subsection{Строки}
+
+В C++ есть две принципиально разные «строки».
+
+\subsubsection{C-строки (\texttt{const char*})}
+
+Массив символов, завершающийся нулевым байтом \texttt{'\textbackslash 0'}.
+Длина не хранится --- её вычисляют, идя до нуля (\texttt{strlen}, $O(n)$).
+
+\begin{lstlisting}
+const char* s = "hello";  // в памяти: h e l l o \0  (6 байт)
+\end{lstlisting}
+
+Минусы: ручное управление памятью, нет информации о длине, легко допустить
+переполнение буфера.
+
+\subsubsection{\texttt{std::string}}
+
+Класс из \texttt{<string>}, управляющий динамическим буфером. Хранит указатель на
+данные, длину и вместимость (capacity), сам выделяет и освобождает память.
+
+\begin{lstlisting}
+#include <string>
+std::string s = "hello";
+s += " world";          // динамически растёт
+std::cout << s.size();  // длина за O(1)
+\end{lstlisting}
+
+\textbf{Small String Optimization (SSO).} Короткие строки (обычно до 15--22
+символов) хранятся \textbf{прямо внутри объекта} \texttt{std::string}, без
+выделения кучи. Это резко ускоряет работу с короткими строками.
+
+\subsubsection{\texttt{std::string\_view} (C++17)}
+
+Невладеющая «ссылка» на последовательность символов: указатель + длина. Не
+копирует данные, не выделяет память. Идеален для передачи строк в функции
+только для чтения.
+
+\begin{lstlisting}
+#include <string_view>
+size_t count_spaces(std::string_view sv) {  // без копирования
+    return std::count(sv.begin(), sv.end(), ' ');
+}
+count_spaces("hello world");        // из литерала
+std::string s = "...";
+count_spaces(s);                    // из std::string
+\end{lstlisting}
+
+\textbf{Опасность:} \texttt{string\_view} не продлевает время жизни данных. Если
+исходная строка уничтожена, \texttt{string\_view} становится висячим.
+
+
+% =======================================================
+\section{Преобразования типов: явные и неявные}
+
+% -------------------------------------------------------
+\subsection{Неявные преобразования (implicit conversions)}
+
+Компилятор сам вставляет преобразование, когда тип выражения не совпадает с
+ожидаемым. Это происходит при присваивании, передаче аргументов, в
+арифметике и т.\,д.
+
+\subsubsection{Целочисленные продвижения (integral promotion)}
+
+Типы меньше \texttt{int} (\texttt{char}, \texttt{short}, \texttt{bool}) перед
+арифметикой продвигаются до \texttt{int}:
+
+\begin{lstlisting}
+char a = 10, b = 20;
+auto c = a + b;   // a и b -> int, тип c == int (а не char!)
+\end{lstlisting}
+
+\subsubsection{Стандартные арифметические преобразования}
+
+Когда операнды разных типов, они приводятся к «более широкому» общему типу:
+
+\begin{lstlisting}
+int    i = 5;
+double d = 2.0;
+auto x = i + d;   // i -> double, тип результата double
+\end{lstlisting}
+
+\subsubsection{Опасность: знаковое и беззнаковое}
+
+Если в выражении встречаются знаковый и беззнаковый типы одинаковой ширины,
+знаковый приводится к беззнаковому --- источник коварных багов:
+
+\begin{lstlisting}
+unsigned int u = 1;
+int i = -1;
+if (i < u)  // i -> unsigned: -1 становится 4294967295
+    std::cout << "i < u";
+else
+    std::cout << "i >= u";   // <-- выполнится ЭТА ветка!
+\end{lstlisting}
+
+\subsubsection{Сужающие преобразования (narrowing)}
+
+Преобразование, при котором значение может не поместиться или потерять точность
+(\texttt{double} $\to$ \texttt{int}, \texttt{int} $\to$ \texttt{char}). В обычном
+коде допускается с потерей данных, но \textbf{запрещено} в списковой
+инициализации \texttt{\{\}}:
+
+\begin{lstlisting}
+int x = 3.9;       // OK, x == 3 (дробная часть отброшена)
+int y{3.9};        // ОШИБКА компиляции: narrowing запрещён в {}
+\end{lstlisting}
+
+\subsubsection{Пользовательские неявные преобразования}
+
+Конструктор с одним аргументом и оператор приведения задают неявные
+преобразования для пользовательских типов:
+
+\begin{lstlisting}
+struct Meters {
+    double value;
+    Meters(double v) : value(v) {}      // неявный конструктор
+    operator double() const { return value; }  // неявное приведение
+};
+Meters m = 5.0;       // double -> Meters (через конструктор)
+double d = m;         // Meters -> double (через operator double)
+\end{lstlisting}
+
+Чтобы запретить неявное преобразование через конструктор, используют
+\texttt{explicit}:
+
+\begin{lstlisting}
+struct Meters {
+    explicit Meters(double v);  // теперь Meters m = 5.0; -- ОШИБКА
+};
+Meters m(5.0);   // только явный вызов
+\end{lstlisting}
+
+\subsection{Явные преобразования (casts)}
+
+C++ предоставляет четыре именованных оператора приведения вместо «всемогущего»
+C-style каста \texttt{(T)x}. Они подробно разобраны в отдельном разделе
+о кастах; кратко:
+
+\begin{center}
+\begin{tabular}{lp{9.5cm}}
+\toprule
+\textbf{Каст} & \textbf{Назначение} \\
+\midrule
+\texttt{static\_cast<T>}      & безопасные «логичные» преобразования (числа, иерархия вверх, \texttt{void*}) \\
+\addlinespace
+\texttt{const\_cast<T>}       & снятие/добавление \texttt{const}/\texttt{volatile} \\
+\addlinespace
+\texttt{reinterpret\_cast<T>} & побитовая переинтерпретация (указатели, целые) \\
+\addlinespace
+\texttt{dynamic\_cast<T>}     & безопасное приведение вниз по полиморфной иерархии (с проверкой в runtime) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}
+double d = 3.7;
+int i = static_cast<int>(d);   // явно: i == 3, намерение видно
+\end{lstlisting}
+
+Преимущества именованных кастов перед C-style: их легко искать в коде, они
+выражают намерение и не делают «слишком много» случайно.
+
+
+% =======================================================
+\section{Структуры и объединения}
+
+% -------------------------------------------------------
+\subsection{Структуры (\texttt{struct})}
+
+\texttt{struct} объединяет несколько полей в один тип. В C++ \texttt{struct} и
+\texttt{class} --- почти одно и то же; разница только в \textbf{умолчательной
+видимости}: у \texttt{struct} члены \texttt{public} по умолчанию, у
+\texttt{class} --- \texttt{private}.
+
+\begin{lstlisting}
+struct Point {
+    int x;
+    int y;
+};
+Point p{3, 4};        // агрегатная инициализация
+std::cout << p.x;     // доступ через точку
+Point* pp = &p;
+std::cout << pp->y;   // доступ через указатель
+\end{lstlisting}
+
+\subsubsection{Выравнивание и padding}
+
+Поля структуры размещаются с учётом \textbf{выравнивания} (alignment): адрес поля
+должен быть кратен его требованию выравнивания. Поэтому компилятор вставляет
+«дыры» (padding):
+
+\begin{lstlisting}
+struct Bad {
+    char  a;   // 1 байт
+    // 3 байта padding
+    int   b;   // 4 байта (адрес кратен 4)
+    char  c;   // 1 байт
+    // 3 байта padding (для кратности размера)
+};  // sizeof(Bad) == 12, а не 6!
+
+struct Good {
+    int   b;   // 4
+    char  a;   // 1
+    char  c;   // 1
+    // 2 байта padding
+};  // sizeof(Good) == 8
+\end{lstlisting}
+
+\textbf{Правило:} располагайте поля от больших к меньшим, чтобы уменьшить padding.
+
+\subsection{Объединения (\texttt{union})}
+
+В \texttt{union} все поля \textbf{делят одну и ту же память}. Размер объединения
+равен размеру наибольшего поля. В любой момент времени «активно» только одно
+поле.
+
+\begin{lstlisting}
+union Value {
+    int    i;
+    float  f;
+    char   bytes[4];
+};
+Value v;
+v.i = 0x40490FDB;
+std::cout << v.f;   // прочитали те же байты как float ~= 3.14159
+\end{lstlisting}
+
+\textbf{Опасность:} чтение неактивного поля --- технически UB (хотя на практике
+часто используется для побитовой интерпретации; правильный способ ---
+\texttt{std::bit\_cast} в C++20 или \texttt{memcpy}).
+
+\subsubsection{Tagged union и \texttt{std::variant}}
+
+Чтобы безопасно знать, какое поле активно, к \texttt{union} добавляют тег:
+
+\begin{lstlisting}
+struct Tagged {
+    enum { INT, FLOAT } tag;
+    union { int i; float f; };
+};
+\end{lstlisting}
+
+В современном C++ вместо ручного tagged union используют \texttt{std::variant}
+(C++17) --- типобезопасное объединение, которое само следит за активным типом.
+
+
+% =======================================================
+\section{Указатели}
+
+% -------------------------------------------------------
+\subsection{Что такое указатель}
+
+\textbf{Указатель} --- это переменная, хранящая \textbf{адрес} другого объекта
+в памяти. Тип указателя говорит, как интерпретировать байты по этому адресу.
+
+\begin{lstlisting}
+int x = 42;
+int* p = &x;     // p хранит адрес x  (& -- взятие адреса)
+std::cout << *p; // 42 -- разыменование (доступ к значению по адресу)
+*p = 100;        // меняем x через указатель -> x == 100
+\end{lstlisting}
+
+Размер указателя одинаков для всех типов и равен ширине адреса платформы (8 байт
+на x86-64).
+
+\subsection{Нулевой указатель}
+
+\texttt{nullptr} (C++11) --- специальное значение «никуда не указывает».
+Разыменование \texttt{nullptr} --- UB (обычно падение).
+
+\begin{lstlisting}
+int* p = nullptr;
+if (p) { /* не выполнится */ }   // указатель конвертируется в bool
+\end{lstlisting}
+
+Используйте \texttt{nullptr}, а не \texttt{NULL} или \texttt{0}: \texttt{nullptr}
+имеет собственный тип \texttt{std::nullptr\_t} и корректно работает с перегрузкой
+функций.
+
+\subsection{Указатели и \texttt{const}}
+
+Расположение \texttt{const} меняет смысл:
+
+\begin{lstlisting}
+const int* p;        // указатель на const int: нельзя менять *p, можно p
+int* const p;        // const-указатель: нельзя менять p, можно *p
+const int* const p;  // нельзя менять ни *p, ни p
+\end{lstlisting}
+
+Читать справа налево: «\texttt{p} is a const pointer to a const int».
+
+\subsection{Арифметика указателей}
+
+Прибавление к указателю $n$ сдвигает адрес на $n \times \texttt{sizeof(T)}$ байт,
+а не на $n$ байт:
+
+\begin{lstlisting}
+int arr[5] = {10, 20, 30, 40, 50};
+int* p = arr;
+std::cout << *(p + 2);  // 30 (сдвиг на 2*sizeof(int) = 8 байт)
+++p;                    // теперь p указывает на arr[1]
+std::cout << p - arr;   // 1 (разность указателей в элементах)
+\end{lstlisting}
+
+\subsection{Указатель на void и на функцию}
+
+\begin{lstlisting}
+void* vp = &x;     // «бестиповый» указатель, нельзя разыменовать напрямую
+int* ip = static_cast<int*>(vp);   // нужно вернуть тип
+
+int (*fp)(int, int) = &add;        // указатель на функцию
+int r = fp(2, 3);                  // вызов через указатель
+\end{lstlisting}
+
+\subsection{Висячие и невалидные указатели}
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{Висячий (dangling)} --- указывает на уже освобождённую память
+          (после \texttt{delete} или выхода объекта из области видимости).
+    \item \textbf{Утечка (leak)} --- объект выделен \texttt{new}, но указатель
+          потерян, и \texttt{delete} никогда не вызовется.
+    \item \textbf{Двойное освобождение} --- \texttt{delete} дважды по одному
+          адресу --- UB.
+\end{itemize}
+
+В современном C++ сырые \texttt{new}/\texttt{delete} заменяют \textbf{умными
+указателями} (\texttt{std::unique\_ptr}, \texttt{std::shared\_ptr}), которые
+освобождают память автоматически.
+
+
+% =======================================================
+\section{Массивы}
+
+% -------------------------------------------------------
+\subsection{Встроенные (C-style) массивы}
+
+Непрерывный блок однотипных элементов фиксированного размера, известного на
+этапе компиляции:
+
+\begin{lstlisting}
+int arr[5] = {1, 2, 3, 4, 5};
+arr[0] = 10;                  // индексация с нуля
+std::cout << sizeof(arr);     // 20 == 5 * sizeof(int)
+std::cout << sizeof(arr)/sizeof(arr[0]);  // 5 -- число элементов
+\end{lstlisting}
+
+\textbf{Нет проверки границ:} \texttt{arr[10]} --- UB, компилятор не остановит.
+
+\subsubsection{Распад массива в указатель (array decay)}
+
+При передаче в функцию массив \textbf{распадается} (decay) в указатель на первый
+элемент --- информация о размере теряется:
+
+\begin{lstlisting}
+void f(int a[]) {       // на самом деле int* a
+    std::cout << sizeof(a);  // размер УКАЗАТЕЛЯ (8), а не массива!
+}
+int arr[5];
+f(arr);  // передаётся &arr[0], размер потерян
+\end{lstlisting}
+
+Поэтому в C-стиле размер передают отдельным параметром: \texttt{f(int* a, size\_t n)}.
+
+\subsection{Многомерные массивы}
+
+\begin{lstlisting}
+int m[2][3] = {{1,2,3}, {4,5,6}};
+// в памяти лежат подряд (row-major): 1 2 3 4 5 6
+std::cout << m[1][2];   // 6
+\end{lstlisting}
+
+\subsection{\texttt{std::array} (C++11)}
+
+Обёртка над C-массивом фиксированного размера, но с интерфейсом контейнера: знает
+свой размер, не распадается в указатель, поддерживает итераторы.
+
+\begin{lstlisting}
+#include <array>
+std::array<int, 5> a = {1, 2, 3, 4, 5};
+std::cout << a.size();        // 5 -- размер не теряется
+for (int x : a) { /* ... */ } // работают range-based for и алгоритмы
+a.at(10);                     // бросает std::out_of_range (с проверкой)
+\end{lstlisting}
+
+\subsection{\texttt{std::vector} --- динамический массив}
+
+Когда размер неизвестен на этапе компиляции или должен меняться, используют
+\texttt{std::vector} --- массив, выделяемый в куче и растущий по мере
+необходимости (подробно --- в разделе о контейнерах).
+
+\begin{lstlisting}
+#include <vector>
+std::vector<int> v = {1, 2, 3};
+v.push_back(4);          // динамически растёт
+std::cout << v.size();   // 4
+\end{lstlisting}
+
+
+% =======================================================
+\section{Устройство памяти, сегменты}
+
+% -------------------------------------------------------
+\subsection{Сегменты памяти процесса}
+
+Адресное пространство процесса делится на области (сегменты):
+
+\begin{center}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{Сегмент} & \textbf{Что хранит} \\
+\midrule
+\texttt{.text} (code)   & машинный код программы, только для чтения \\
+\addlinespace
+\texttt{.rodata}        & константы и строковые литералы (только чтение) \\
+\addlinespace
+\texttt{.data}          & инициализированные глобальные/статические переменные \\
+\addlinespace
+\texttt{.bss}           & неинициализированные глобальные/статические (обнуляются) \\
+\addlinespace
+\textbf{Куча (heap)}    & динамическая память (\texttt{new}/\texttt{malloc}), растёт вверх \\
+\addlinespace
+\textbf{Стек (stack)}   & локальные переменные, кадры вызовов, растёт вниз \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}[numbers=none]
+  Высокие адреса
+  +------------------+
+  |      Stack       |  <- растёт вниз (локальные переменные)
+  |        |         |
+  |        v         |
+  |                  |
+  |        ^         |
+  |        |         |
+  |      Heap        |  <- растёт вверх (new/malloc)
+  +------------------+
+  |   .bss / .data   |  <- глобальные/статические
+  +------------------+
+  |  .rodata / .text |  <- код и константы
+  +------------------+
+  Низкие адреса
+\end{lstlisting}
+
+\subsection{Стек vs Куча}
+
+\begin{center}
+\begin{tabular}{lp{4.5cm}p{4.5cm}}
+\toprule
+& \textbf{Стек} & \textbf{Куча} \\
+\midrule
+Управление  & автоматическое (компилятор) & ручное (\texttt{new}/\texttt{delete}) \\
+\addlinespace
+Скорость    & очень быстро (сдвиг указателя) & медленнее (поиск блока) \\
+\addlinespace
+Размер      & ограничен (обычно 1--8 МБ) & ограничен ОЗУ \\
+\addlinespace
+Время жизни & до конца области видимости & пока не вызовут \texttt{delete} \\
+\addlinespace
+Фрагментация & нет & возможна \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}
+void f() {
+    int x = 5;                 // на стеке, исчезнет при выходе из f
+    int* p = new int(5);       // объект в куче, указатель p на стеке
+    delete p;                  // память кучи нужно вернуть вручную
+}                              // x уничтожается автоматически
+\end{lstlisting}
+
+\subsection{Время жизни и классы хранения}
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{Автоматическое} (локальные переменные) --- на стеке, живёт до
+          конца блока.
+    \item \textbf{Статическое} (\texttt{static}, глобальные) --- в \texttt{.data}/\texttt{.bss},
+          живёт всё время работы программы.
+    \item \textbf{Динамическое} (\texttt{new}) --- в куче, живёт до \texttt{delete}.
+    \item \textbf{Thread-local} (\texttt{thread\_local}) --- по копии на каждый поток.
+\end{itemize}
+
+\subsection{Переполнение стека (stack overflow)}
+
+Стек ограничен. Слишком глубокая рекурсия или огромный локальный массив
+исчерпывают его:
+
+\begin{lstlisting}
+void recurse() { recurse(); }   // бесконечная рекурсия -> stack overflow
+void big()     { int huge[10'000'000]; }  // слишком большой кадр стека
+\end{lstlisting}
+
+
+% =======================================================
+\section{Стек вызова функций}
+
+% -------------------------------------------------------
+\subsection{Кадр стека (stack frame)}
+
+При каждом вызове функции на стеке создаётся \textbf{кадр (frame)}, содержащий:
+
+\begin{itemize}[leftmargin=2em]
+    \item аргументы функции (часть может передаваться в регистрах);
+    \item адрес возврата (куда вернуться после функции);
+    \item сохранённый указатель кадра вызывающего;
+    \item локальные переменные.
+\end{itemize}
+
+\begin{lstlisting}
+int square(int n) {       // кадр square: n, локальные
+    int r = n * n;
+    return r;
+}
+int main() {
+    int x = square(5);    // создаётся кадр square поверх кадра main
+}
+\end{lstlisting}
+
+\subsubsection{Как растёт стек}
+
+При вызове кадр \textbf{кладётся} на вершину стека, при возврате ---
+\textbf{снимается}. Стек растёт в сторону младших адресов:
+
+\begin{lstlisting}[numbers=none]
+main() вызывает square(5):
+
+  | кадр main   |          | кадр main   |          | кадр main   |
+  +-------------+   --->   +-------------+   --->   +-------------+
+                           | кадр square |
+                           +-------------+          (square вернулась,
+   до вызова                во время вызова           кадр снят)
+\end{lstlisting}
+
+\subsection{Указатели стека}
+
+\begin{itemize}[leftmargin=2em]
+    \item \texttt{SP} (stack pointer) --- указывает на вершину стека.
+    \item \texttt{BP/FP} (base/frame pointer) --- база текущего кадра, по нему
+          адресуются локальные переменные и аргументы.
+\end{itemize}
+
+\subsection{Соглашения о вызове (calling convention)}
+
+Соглашение определяет, как передаются аргументы (регистры/стек), кто чистит стек,
+в каком регистре возвращается результат. Примеры: System~V~AMD64 (Linux),
+Microsoft~x64 (Windows), \texttt{cdecl}, \texttt{stdcall}. На x86-64 первые
+несколько целочисленных аргументов обычно идут в регистрах.
+
+\subsection{Раскрутка стека (stack unwinding)}
+
+При выбросе исключения стек \textbf{раскручивается}: кадры снимаются один за
+другим, и для каждого локального объекта вызывается деструктор. Это основа RAII
+и обработки ошибок (подробно --- в разделе об исключениях).
+
+\subsection{Хвостовая рекурсия}
+
+Если рекурсивный вызов --- последнее действие функции, компилятор может
+\textbf{переиспользовать} текущий кадр (tail-call optimization), превращая
+рекурсию в цикл и избегая роста стека:
+
+\begin{lstlisting}
+int fact(int n, int acc = 1) {
+    if (n <= 1) return acc;
+    return fact(n - 1, acc * n);   // хвостовой вызов
+}
+\end{lstlisting}
+
+
+% =======================================================
+\section{Ссылки}
+
+% -------------------------------------------------------
+\subsection{Что такое ссылка}
+
+\textbf{Ссылка (lvalue reference)} --- это \textbf{псевдоним} (другое имя) для уже
+существующего объекта. В отличие от указателя, ссылку нельзя «перенаправить» и
+нельзя сделать «нулевой».
+
+\begin{lstlisting}
+int x = 10;
+int& ref = x;     // ref -- другое имя для x
+ref = 20;         // меняем x через ссылку -> x == 20
+int* p = &ref;    // &ref -- это адрес x
+\end{lstlisting}
+
+\subsubsection{Ссылка vs указатель}
+
+\begin{center}
+\begin{tabular}{lp{4.5cm}p{4.5cm}}
+\toprule
+& \textbf{Ссылка} & \textbf{Указатель} \\
+\midrule
+Инициализация & обязательна при объявлении & необязательна \\
+\addlinespace
+Перенаправление & невозможно & возможно \\
+\addlinespace
+Может быть «нулём» & нет & да (\texttt{nullptr}) \\
+\addlinespace
+Синтаксис доступа & как к обычной переменной & нужно \texttt{*} / \texttt{->} \\
+\addlinespace
+Арифметика & нет & да \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Ссылки в параметрах функций}
+
+Передача по ссылке избегает копирования и позволяет менять аргумент:
+
+\begin{lstlisting}
+void increment(int& x) { ++x; }       // меняет оригинал
+void print(const std::string& s);     // не копирует, но не меняет
+\end{lstlisting}
+
+\textbf{Правило:} большие объекты, которые не меняются, передавайте по
+\texttt{const T\&} --- без копии и без риска модификации.
+
+\subsection{Висячие ссылки}
+
+Нельзя возвращать ссылку на локальную переменную --- она уничтожится:
+
+\begin{lstlisting}
+int& bad() {
+    int local = 5;
+    return local;   // ОШИБКА: ссылка на уничтоженную переменную (UB)
+}
+\end{lstlisting}
+
+\subsection{Константные ссылки и продление жизни}
+
+\texttt{const}-ссылка может привязаться к временному объекту и \textbf{продлевает
+его время жизни} до конца жизни ссылки:
+
+\begin{lstlisting}
+const std::string& r = std::string("temp");  // временный живёт, пока жив r
+\end{lstlisting}
+
+\subsection{Rvalue-ссылки (C++11)}
+
+\texttt{T\&\&} --- ссылка на временный объект (rvalue). Лежит в основе
+move-семантики и perfect forwarding (подробно --- в отдельном разделе):
+
+\begin{lstlisting}
+std::string&& rr = std::string("temp");  // привязка к rvalue
+void sink(std::string&& s);              // забирает ресурсы временного
+\end{lstlisting}
+
+
+% =======================================================
+\section{Перегрузка функций}
+
+% -------------------------------------------------------
+\subsection{Что это}
+
+\textbf{Перегрузка (overloading)} --- несколько функций с \textbf{одним именем},
+но разными списками параметров. Компилятор выбирает нужную по аргументам вызова.
+
+\begin{lstlisting}
+int    add(int a, int b)       { return a + b; }
+double add(double a, double b) { return a + b; }
+std::string add(const std::string& a, const std::string& b) { return a + b; }
+
+add(1, 2);          // int-версия
+add(1.5, 2.5);      // double-версия
+add("a"s, "b"s);    // string-версия
+\end{lstlisting}
+
+\subsection{Что участвует в выборе}
+
+Перегрузки различаются по:
+\begin{itemize}[leftmargin=2em]
+    \item числу параметров;
+    \item типам параметров;
+    \item \texttt{const}/\texttt{volatile} и ссылочности (\texttt{\&}/\texttt{\&\&}).
+\end{itemize}
+
+\textbf{Не различаются} только по \textbf{типу возвращаемого значения} --- это
+ошибка:
+
+\begin{lstlisting}
+int    f(int);
+double f(int);   // ОШИБКА: отличается только возвращаемый тип
+\end{lstlisting}
+
+\subsection{Разрешение перегрузки (overload resolution)}
+
+Компилятор делает это в три шага:
+\begin{enumerate}[leftmargin=2em]
+    \item \textbf{Набор кандидатов} --- все функции с таким именем, видимые в
+          точке вызова.
+    \item \textbf{Жизнеспособные (viable)} --- те, что подходят по числу
+          аргументов и для которых существуют преобразования.
+    \item \textbf{Лучшая} --- та, что требует «наименьших» преобразований.
+          Точное совпадение лучше продвижения, продвижение лучше стандартного
+          преобразования, стандартное лучше пользовательского.
+\end{enumerate}
+
+Если две функции одинаково хороши --- \textbf{неоднозначность (ambiguous)} ---
+ошибка компиляции:
+
+\begin{lstlisting}
+void f(long);
+void f(double);
+f(5);    // ОШИБКА: int -> long и int -> double равноправны
+\end{lstlisting}
+
+\subsection{Перегрузка по \texttt{const} и ссылочности}
+
+\begin{lstlisting}
+struct S {
+    void g() &;        // вызывается на lvalue
+    void g() &&;       // вызывается на rvalue (временном)
+    int  get() const;  // на const-объекте
+    int& get();        // на неконстантном
+};
+\end{lstlisting}
+
+\subsection{Перегрузка vs переопределение vs сокрытие}
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{Overloading} --- одно имя, разные сигнатуры, \textit{в одной}
+          области видимости.
+    \item \textbf{Overriding} --- замена \texttt{virtual}-функции в наследнике с
+          \textit{той же} сигнатурой.
+    \item \textbf{Hiding} --- имя в наследнике скрывает \textit{все} перегрузки
+          из базы (лечится \texttt{using Base::name;}).
+\end{itemize}
+
+\subsection{Значения по умолчанию}
+
+Не путать с перегрузкой: один и тот же набор параметров, но часть имеет значение
+по умолчанию:
+
+\begin{lstlisting}
+void log(const std::string& msg, int level = 0);
+log("hello");      // level == 0
+log("err", 3);     // level == 3
+\end{lstlisting}
+
+
+% =======================================================
+\section{Пространства имён (namespace)}
+
+% -------------------------------------------------------
+\subsection{Зачем нужны namespace}
+
+\textbf{namespace} группирует имена и предотвращает \textbf{конфликты имён} между
+разными библиотеками. Вся стандартная библиотека лежит в \texttt{std}.
+
+\begin{lstlisting}
+namespace math {
+    double pi() { return 3.14159; }
+    struct Vector { double x, y; };
+}
+double p = math::pi();      // доступ через ::
+math::Vector v;
+\end{lstlisting}
+
+\subsection{Использование имён из namespace}
+
+\begin{lstlisting}
+using namespace std;        // вносит ВСЕ имена std (не рекомендуется глобально)
+using std::cout;            // вносит только cout (предпочтительно)
+\end{lstlisting}
+
+\textbf{Совет:} не пишите \texttt{using namespace std;} в заголовках и в глобальной
+области --- это возвращает проблему конфликтов имён.
+
+\subsection{Вложенные namespace}
+
+\begin{lstlisting}
+namespace company::project::utils {   // C++17, компактная запись
+    void helper();
+}
+// эквивалентно вложенным namespace company { namespace project { ... } }
+\end{lstlisting}
+
+\subsection{Анонимный namespace}
+
+Имена в безымянном namespace видны \textbf{только в этом файле} (аналог
+\texttt{static} для внутренней линковки):
+
+\begin{lstlisting}
+namespace {
+    int internal_counter = 0;   // не виден из других .cpp
+}
+\end{lstlisting}
+
+\subsection{Псевдонимы namespace}
+
+\begin{lstlisting}
+namespace fs = std::filesystem;   // короткий псевдоним
+fs::path p = "/tmp";
+\end{lstlisting}
+
+\subsection{Argument-Dependent Lookup (ADL)}
+
+При вызове функции компилятор ищет её \textbf{также} в namespace, где определены
+типы аргументов. Поэтому работает \texttt{std::cout << x} без явного \texttt{std::}
+перед \texttt{operator<<}:
+
+\begin{lstlisting}
+namespace lib { struct S{}; void process(S); }
+lib::S s;
+process(s);   // находит lib::process через ADL, хотя нет lib::
+\end{lstlisting}
+
+
+% =======================================================
+\section{Компиляция: этапы, ошибки}
+
+% -------------------------------------------------------
+\subsection{Этапы сборки программы на C++}
+
+Превращение исходника в исполняемый файл проходит четыре стадии:
+
+\begin{center}
+\begin{tabular}{lp{9.5cm}}
+\toprule
+\textbf{Этап} & \textbf{Что делает} \\
+\midrule
+1. Препроцессинг & раскрывает \texttt{\#include}, \texttt{\#define}, \texttt{\#ifdef}; результат --- единый текст (translation unit) \\
+\addlinespace
+2. Компиляция & переводит C++ в ассемблер, затем в объектный код (\texttt{.o}); проверяет синтаксис и типы \\
+\addlinespace
+3. Ассемблирование & переводит ассемблер в машинный код (объектный файл) \\
+\addlinespace
+4. Линковка & связывает объектные файлы и библиотеки в исполняемый файл, разрешает символы \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}[numbers=none]
+main.cpp --[препроцессор]--> main.i --[компилятор]--> main.s
+        --[ассемблер]--> main.o --[линковщик]--> a.out
+\end{lstlisting}
+
+\begin{lstlisting}
+g++ -E main.cpp -o main.i   # только препроцессинг
+g++ -S main.cpp -o main.s   # до ассемблера
+g++ -c main.cpp -o main.o   # до объектного файла (без линковки)
+g++ main.cpp -o app         # всё сразу
+\end{lstlisting}
+
+\subsection{Единица трансляции и модель компиляции}
+
+Каждый \texttt{.cpp} компилируется \textbf{независимо} в свою единицу трансляции.
+Заголовки (\texttt{.h}) физически \textbf{вставляются} препроцессором в каждый
+\texttt{.cpp}, который их включает.
+
+\subsubsection{Защита от повторного включения}
+
+Чтобы заголовок не вставился дважды в одну единицу трансляции:
+
+\begin{lstlisting}
+#pragma once          // современный способ
+// или классический include guard:
+#ifndef MY_HEADER_H
+#define MY_HEADER_H
+// ... содержимое ...
+#endif
+\end{lstlisting}
+
+\subsection{Объявление vs определение (ODR)}
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{Объявление (declaration)} --- говорит «такой символ существует»
+          (можно много раз).
+    \item \textbf{Определение (definition)} --- предоставляет тело/память
+          (\textbf{ровно один раз} на всю программу --- One Definition Rule).
+\end{itemize}
+
+\begin{lstlisting}
+// header.h
+int add(int, int);          // объявление (прототип)
+extern int counter;         // объявление глобальной переменной
+
+// source.cpp
+int add(int a, int b) { return a+b; }  // определение
+int counter = 0;                       // определение
+\end{lstlisting}
+
+\subsection{Виды ошибок}
+
+\begin{center}
+\begin{tabular}{lp{8.5cm}}
+\toprule
+\textbf{Вид} & \textbf{Когда и пример} \\
+\midrule
+Ошибка препроцессора & нет файла в \texttt{\#include}, незакрытый \texttt{\#ifdef} \\
+\addlinespace
+Ошибка компиляции & синтаксис, неизвестный тип, несоответствие типов \\
+\addlinespace
+Ошибка линковки & \texttt{undefined reference} (объявлено, но не определено), \texttt{multiple definition} (нарушен ODR) \\
+\addlinespace
+Ошибка времени выполнения & segfault, деление на ноль, исключение --- ловится только при запуске \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Типичная ошибка линковки}
+
+\begin{lstlisting}
+// foo.h
+void foo();           // объявили
+// main.cpp
+#include "foo.h"
+int main() { foo(); } // используем, но определения foo() нет нигде
+// -> undefined reference to `foo()'  (ошибка ЛИНКОВКИ, не компиляции)
+\end{lstlisting}
+
+\subsection{Полезные флаги компилятора}
+
+\begin{lstlisting}
+g++ -std=c++20 -Wall -Wextra -Wpedantic main.cpp   # стандарт + предупреждения
+g++ -g main.cpp            # отладочная информация (для gdb)
+g++ -O2 main.cpp           # оптимизация
+g++ -fsanitize=address main.cpp   # детектор ошибок памяти (ASan)
+\end{lstlisting}

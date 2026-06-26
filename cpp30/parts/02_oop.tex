@@ -1,0 +1,494 @@
+% =======================================================
+% ООП
+% =======================================================
+
+\section{ООП: абстракция, инкапсуляция, наследование, полиморфизм}
+
+% -------------------------------------------------------
+\subsection{Четыре столпа ООП}
+
+\textbf{Объектно-ориентированное программирование} строится на четырёх принципах:
+
+\begin{center}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{Принцип} & \textbf{Суть} \\
+\midrule
+Абстракция     & выделить существенное, скрыть детали реализации \\
+\addlinespace
+Инкапсуляция   & объединить данные и методы, ограничить прямой доступ к данным \\
+\addlinespace
+Наследование   & строить новые типы на основе существующих \\
+\addlinespace
+Полиморфизм    & один интерфейс --- разное поведение для разных типов \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Абстракция}
+
+Абстракция --- предоставление \textbf{интерфейса} без раскрытия реализации.
+Пользователь класса знает \textit{что} делает метод, но не \textit{как}:
+
+\begin{lstlisting}
+class Stack {
+public:
+    void push(int x);    // ЧТО делает -- интерфейс
+    int  pop();
+    bool empty() const;
+private:
+    // КАК устроено -- скрыто (вектор, список, массив -- неважно)
+    std::vector<int> data_;
+};
+\end{lstlisting}
+
+\subsection{Инкапсуляция}
+
+Инкапсуляция --- сокрытие внутреннего состояния за модификаторами доступа. Доступ
+к данным только через методы, которые поддерживают \textbf{инварианты} класса.
+
+\begin{center}
+\begin{tabular}{lp{8.5cm}}
+\toprule
+\textbf{Модификатор} & \textbf{Кто имеет доступ} \\
+\midrule
+\texttt{public}    & все \\
+\texttt{protected} & сам класс и наследники \\
+\texttt{private}   & только сам класс (и \texttt{friend}) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}
+class Account {
+public:
+    void deposit(double sum) {
+        if (sum > 0) balance_ += sum;   // инвариант: баланс корректен
+    }
+    double balance() const { return balance_; }
+private:
+    double balance_ = 0;   // нельзя изменить напрямую снаружи
+};
+\end{lstlisting}
+
+\subsection{Наследование}
+
+Наследование позволяет классу-наследнику (derived) получить члены базового
+класса (base) и расширить/изменить их.
+
+\begin{lstlisting}
+class Animal {
+public:
+    void breathe() { /* общее поведение */ }
+protected:
+    std::string name_;
+};
+class Dog : public Animal {   // Dog -- это Animal (is-a)
+public:
+    void bark() { /* специфично для Dog */ }
+};
+\end{lstlisting}
+
+\subsubsection{Виды наследования}
+
+\texttt{public} наследование выражает отношение \textbf{«является» (is-a)} и
+используется чаще всего. \texttt{protected}/\texttt{private} --- отношение
+«реализован через», встречается редко.
+
+\subsubsection{Множественное наследование и проблема ромба}
+
+C++ допускает наследование от нескольких классов. Если два базовых класса сами
+наследуют от общего предка, возникает \textbf{ромб (diamond)} --- дублирование
+подобъекта. Решается \textbf{виртуальным наследованием}:
+
+\begin{lstlisting}
+class A { public: int x; };
+class B : virtual public A {};   // virtual -> единственный подобъект A
+class C : virtual public A {};
+class D : public B, public C {}; // D::x -- один, а не два
+\end{lstlisting}
+
+\subsection{Полиморфизм}
+
+\subsubsection{Динамический полиморфизм (виртуальные функции)}
+
+Вызов метода через указатель/ссылку на базовый класс приводит к вызову версии
+\textbf{реального} типа объекта --- в runtime:
+
+\begin{lstlisting}
+class Shape {
+public:
+    virtual double area() const = 0;   // чисто виртуальная (=0)
+    virtual ~Shape() = default;        // виртуальный деструктор обязателен!
+};
+class Circle : public Shape {
+    double r_;
+public:
+    Circle(double r) : r_(r) {}
+    double area() const override { return 3.14159 * r_ * r_; }
+};
+class Square : public Shape {
+    double s_;
+public:
+    Square(double s) : s_(s) {}
+    double area() const override { return s_ * s_; }
+};
+
+void print_area(const Shape& s) {
+    std::cout << s.area();   // вызовется нужная версия (Circle или Square)
+}
+\end{lstlisting}
+
+\textbf{Абстрактный класс} --- содержит хотя бы одну чисто виртуальную функцию
+(\texttt{= 0}); объект такого класса создать нельзя, только наследника.
+
+\subsubsection{Как это работает: vtable и vptr}
+
+У каждого полиморфного класса есть \textbf{таблица виртуальных функций (vtable)}
+--- массив указателей на его методы. Каждый объект хранит скрытый указатель
+\textbf{vptr} на vtable своего класса. Виртуальный вызов --- это косвенный вызов
+через vtable:
+
+\begin{lstlisting}[numbers=none]
+Circle obj;            vtable Circle:
+  +--------+           +------------------+
+  | vptr   |---------> | Circle::area     |
+  | r_     |           | Circle::~Circle  |
+  +--------+           +------------------+
+\end{lstlisting}
+
+\textbf{Зачем виртуальный деструктор:} при \texttt{delete} через указатель на
+базу без \texttt{virtual}-деструктора вызовется только \texttt{\textasciitilde Base},
+ресурсы наследника утекут --- UB.
+
+\subsubsection{\texttt{override} и \texttt{final}}
+
+\begin{lstlisting}
+class Derived : public Base {
+    void f() override;   // компилятор проверит, что в базе есть virtual f
+    void g() final;      // запретить переопределять g дальше
+};
+class X final {};        // запретить наследоваться от X
+\end{lstlisting}
+
+\subsubsection{Статический полиморфизм}
+
+Полиморфизм без runtime-затрат достигается шаблонами и CRTP (см. соответствующие
+разделы). Выбор реализации происходит на этапе компиляции.
+
+
+% =======================================================
+\section{Классы. Специальные методы}
+
+% -------------------------------------------------------
+\subsection{Специальные функции-члены}
+
+Компилятор может сам сгенерировать шесть особых методов:
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Метод} & \textbf{Сигнатура} \\
+\midrule
+Конструктор по умолчанию & \texttt{T()} \\
+Деструктор               & \texttt{\textasciitilde T()} \\
+Копирующий конструктор   & \texttt{T(const T\&)} \\
+Копирующее присваивание  & \texttt{T\& operator=(const T\&)} \\
+Перемещающий конструктор & \texttt{T(T\&\&)} \\
+Перемещающее присваивание & \texttt{T\& operator=(T\&\&)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Конструкторы}
+
+Конструктор инициализирует объект. Может быть перегружен.
+
+\begin{lstlisting}
+class Point {
+    int x_, y_;
+public:
+    Point() : x_(0), y_(0) {}           // по умолчанию
+    Point(int x, int y) : x_(x), y_(y) {}  // с параметрами
+    explicit Point(int v) : x_(v), y_(v) {}  // explicit -- без неявных
+};
+\end{lstlisting}
+
+\subsubsection{Список инициализации членов}
+
+Члены инициализируются \textbf{в списке инициализации}, а не в теле конструктора.
+Это важно: в теле было бы присваивание (поле уже создано), а в списке ---
+прямая инициализация. Для \texttt{const}-полей и ссылок список обязателен.
+
+\begin{lstlisting}
+class Widget {
+    const int id_;     // const можно инициализировать ТОЛЬКО в списке
+    std::string name_;
+public:
+    Widget(int id, std::string name)
+        : id_(id), name_(std::move(name)) {}  // порядок -- как объявлены поля!
+};
+\end{lstlisting}
+
+\textbf{Важно:} члены инициализируются в порядке \textbf{объявления в классе}, а
+не в порядке в списке инициализации.
+
+\subsubsection{Делегирующие конструкторы}
+
+\begin{lstlisting}
+class Point {
+    int x_, y_;
+public:
+    Point(int x, int y) : x_(x), y_(y) {}
+    Point() : Point(0, 0) {}   // делегирует другому конструктору
+};
+\end{lstlisting}
+
+\subsection{Деструктор}
+
+Деструктор освобождает ресурсы при уничтожении объекта. Вызывается автоматически.
+Основа RAII.
+
+\begin{lstlisting}
+class File {
+    FILE* f_;
+public:
+    File(const char* name) : f_(fopen(name, "r")) {}
+    ~File() { if (f_) fclose(f_); }   // ресурс освобождается сам
+};
+\end{lstlisting}
+
+\subsection{Правило трёх / пяти / нуля}
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{Правило трёх:} если нужен пользовательский деструктор,
+          копирующий конструктор или копирующее присваивание --- скорее всего,
+          нужны все три (класс владеет ресурсом).
+    \item \textbf{Правило пяти:} добавьте move-конструктор и move-присваивание
+          для эффективности.
+    \item \textbf{Правило нуля:} лучше \textbf{вообще не писать} спецметоды ---
+          используйте типы, которые сами управляют ресурсами
+          (\texttt{std::string}, \texttt{std::vector}, умные указатели), тогда
+          компилятор сгенерирует всё правильно.
+\end{itemize}
+
+\begin{lstlisting}
+// Правило нуля: ничего не пишем -- всё генерируется корректно
+class Person {
+    std::string name_;
+    std::vector<int> scores_;
+};  // копирование, перемещение, удаление -- автоматически и правильно
+\end{lstlisting}
+
+\subsection{\texttt{= default} и \texttt{= delete}}
+
+\begin{lstlisting}
+class T {
+public:
+    T() = default;                       // явно просим сгенерировать
+    T(const T&) = delete;                // запрещаем копирование
+    T& operator=(const T&) = delete;
+    T(T&&) = default;                    // разрешаем перемещение
+};
+\end{lstlisting}
+
+\subsection{Статические члены}
+
+\texttt{static}-член принадлежит \textbf{классу}, а не объекту --- общий для всех
+экземпляров:
+
+\begin{lstlisting}
+class Counter {
+    static int count_;     // объявление (одна копия на класс)
+public:
+    Counter()  { ++count_; }
+    ~Counter() { --count_; }
+    static int count() { return count_; }  // static-метод: без this
+};
+int Counter::count_ = 0;   // определение вне класса (или inline в C++17)
+\end{lstlisting}
+
+\subsection{\texttt{const}-методы и \texttt{mutable}}
+
+\texttt{const}-метод обещает не менять объект; его можно вызывать на
+\texttt{const}-объекте. \texttt{mutable}-поле можно менять даже в
+\texttt{const}-методе (для кэшей, мьютексов):
+
+\begin{lstlisting}
+class Cache {
+    mutable int cached_ = -1;   // можно менять в const-методе
+public:
+    int get() const {
+        if (cached_ < 0) cached_ = compute();
+        return cached_;
+    }
+};
+\end{lstlisting}
+
+\subsection{\texttt{friend}}
+
+\texttt{friend}-функция или класс получает доступ к \texttt{private}-членам:
+
+\begin{lstlisting}
+class Vector2 {
+    double x_, y_;
+    friend Vector2 operator+(const Vector2&, const Vector2&);  // имеет доступ
+};
+\end{lstlisting}
+
+\subsection{\texttt{this}}
+
+\texttt{this} --- указатель на текущий объект внутри нестатического метода. Тип
+--- \texttt{T*} (или \texttt{const T*} в const-методе).
+
+\begin{lstlisting}
+class Builder {
+    int v_ = 0;
+public:
+    Builder& set(int v) { v_ = v; return *this; }  // fluent-интерфейс
+};
+Builder{}.set(1).set(2);   // цепочка вызовов
+\end{lstlisting}
+
+
+% =======================================================
+\section{Перегрузка операторов}
+
+% -------------------------------------------------------
+\subsection{Зачем перегружать операторы}
+
+Перегрузка операторов позволяет пользовательским типам вести себя как
+встроенные: складываться через \texttt{+}, сравниваться через \texttt{==},
+печататься через \texttt{<<}. Это синтаксический сахар: \texttt{a + b} ---
+это вызов \texttt{operator+(a, b)}.
+
+\subsection{Способы перегрузки: метод vs свободная функция}
+
+\begin{lstlisting}
+struct Complex {
+    double re, im;
+
+    // как метод: левый операнд -- *this
+    Complex operator+(const Complex& o) const {
+        return {re + o.re, im + o.im};
+    }
+};
+
+// как свободная функция (симметрично для обоих операндов)
+Complex operator-(const Complex& a, const Complex& b) {
+    return {a.re - b.re, a.im - b.im};
+}
+\end{lstlisting}
+
+\textbf{Правило:} бинарные симметричные операторы (\texttt{+}, \texttt{==}) лучше
+делать свободными функциями --- тогда работают неявные преобразования для
+\textit{обоих} операндов. Операторы, меняющие объект (\texttt{+=}, \texttt{=},
+\texttt{[]}), --- методами.
+
+\subsection{Арифметические операторы и каноничная форма}
+
+Принято определять \texttt{+=} как метод, а \texttt{+} --- через него:
+
+\begin{lstlisting}
+struct Vec {
+    double x, y;
+    Vec& operator+=(const Vec& o) { x += o.x; y += o.y; return *this; }
+};
+Vec operator+(Vec a, const Vec& b) { return a += b; }  // через +=
+\end{lstlisting}
+
+\subsection{Операторы сравнения и spaceship (C++20)}
+
+До C++20 нужно было определять все шесть операторов сравнения. В C++20 достаточно
+оператора \texttt{<=>} (three-way comparison) --- остальные генерируются:
+
+\begin{lstlisting}
+#include <compare>
+struct Point {
+    int x, y;
+    auto operator<=>(const Point&) const = default;  // <,>,<=,>=
+    bool operator==(const Point&) const = default;   // ==, !=
+};
+\end{lstlisting}
+
+\subsection{Оператор вывода \texttt{<<}}
+
+Перегружается \textbf{только} как свободная функция (левый операнд ---
+\texttt{std::ostream}, не наш тип):
+
+\begin{lstlisting}
+std::ostream& operator<<(std::ostream& os, const Point& p) {
+    return os << '(' << p.x << ", " << p.y << ')';
+}
+std::cout << Point{1, 2};   // (1, 2)
+\end{lstlisting}
+
+\subsection{Оператор индексирования \texttt{[]}}
+
+\begin{lstlisting}
+class Array {
+    int data_[100];
+public:
+    int&       operator[](size_t i)       { return data_[i]; }  // запись
+    const int& operator[](size_t i) const { return data_[i]; }  // чтение
+};
+\end{lstlisting}
+
+\subsection{Оператор вызова \texttt{()} --- функциональные объекты}
+
+Класс с \texttt{operator()} называется \textbf{функтором} --- его объект можно
+«вызывать»:
+
+\begin{lstlisting}
+struct Adder {
+    int base;
+    int operator()(int x) const { return x + base; }
+};
+Adder add5{5};
+add5(10);   // 15 -- объект вызывается как функция
+\end{lstlisting}
+
+Функторы --- основа лямбд и предикатов для алгоритмов STL.
+
+\subsection{Операторы инкремента}
+
+Различают префиксный и постфиксный (отличаются фиктивным \texttt{int}-параметром):
+
+\begin{lstlisting}
+struct Counter {
+    int v = 0;
+    Counter& operator++()    { ++v; return *this; }       // префиксный ++c
+    Counter  operator++(int) { Counter t = *this; ++v; return t; } // c++
+};
+\end{lstlisting}
+
+\subsection{Операторы преобразования}
+
+\begin{lstlisting}
+struct Fraction {
+    int num, den;
+    explicit operator double() const { return double(num) / den; }
+};
+double d = static_cast<double>(Fraction{1, 2});  // 0.5
+\end{lstlisting}
+
+\subsection{Что нельзя перегружать}
+
+Нельзя перегрузить: \texttt{::} (разрешение области), \texttt{.} (доступ к члену),
+\texttt{.*}, \texttt{?:} (тернарный), \texttt{sizeof}, \texttt{typeid}. Нельзя
+придумывать новые операторы или менять их арность/приоритет.
+
+\subsection{Умные указатели и операторы \texttt{*}, \texttt{->}}
+
+Перегрузка \texttt{operator*} и \texttt{operator->} позволяет классу вести себя
+как указатель --- так устроены \texttt{unique\_ptr} и итераторы:
+
+\begin{lstlisting}
+template<typename T>
+class Ptr {
+    T* p_;
+public:
+    T& operator*()  const { return *p_; }
+    T* operator->() const { return p_; }
+};
+\end{lstlisting}

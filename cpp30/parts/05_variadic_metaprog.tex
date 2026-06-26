@@ -1,0 +1,278 @@
+% =======================================================
+% ВАРИАТИВНЫЕ ШАБЛОНЫ и МЕТАПРОГРАММИРОВАНИЕ
+% =======================================================
+
+\section{Вариативные шаблоны (variadic templates)}
+
+% -------------------------------------------------------
+\subsection{Что это}
+
+\textbf{Вариативный шаблон} принимает \textbf{произвольное число} параметров
+любых типов. Это позволило реализовать в библиотеке \texttt{printf}-подобные
+функции, \texttt{std::tuple}, \texttt{std::make\_unique} и др.
+
+\begin{lstlisting}
+template<typename... Args>      // Args -- пакет параметров типов
+void print(Args... args);      // args -- пакет аргументов-значений
+print(1, 2.5, "hello");        // Args = {int, double, const char*}
+\end{lstlisting}
+
+\subsubsection{Пакеты параметров (parameter packs)}
+
+\begin{itemize}[leftmargin=2em]
+    \item \texttt{typename... Args} --- пакет шаблонных параметров.
+    \item \texttt{Args... args} --- пакет функциональных параметров.
+    \item \texttt{args...} --- \textbf{развёртка (expansion)} пакета.
+    \item \texttt{sizeof...(Args)} --- число элементов в пакете.
+\end{itemize}
+
+\subsection{Рекурсивная обработка пакета (классический способ)}
+
+До C++17 пакет обрабатывали рекурсией: «голова + хвост» с базовым случаем:
+
+\begin{lstlisting}
+void print() {}   // базовый случай: пустой пакет
+
+template<typename Head, typename... Tail>
+void print(Head h, Tail... tail) {
+    std::cout << h;                 // обработали первый
+    if (sizeof...(tail) > 0) std::cout << ", ";
+    print(tail...);                 // рекурсия по остатку
+}
+print(1, 2, 3);   // 1, 2, 3
+\end{lstlisting}
+
+\subsection{Fold-выражения (C++17)}
+
+\textbf{Свёртки (fold expressions)} применяют оператор ко всему пакету без
+рекурсии:
+
+\begin{lstlisting}
+template<typename... Args>
+auto sum(Args... args) {
+    return (args + ...);      // унарная правая свёртка: a1 + (a2 + (a3 + ...))
+}
+sum(1, 2, 3, 4);   // 10
+\end{lstlisting}
+
+Четыре формы свёрток:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Форма} & \textbf{Раскрытие} \\
+\midrule
+\texttt{(pack op ...)}          & унарная правая: $e_1\ op\ (\dots op\ e_n)$ \\
+\texttt{(... op pack)}          & унарная левая:  $((e_1\ op\ e_2)\ op\ \dots)$ \\
+\texttt{(pack op ... op init)}  & бинарная правая (с начальным значением) \\
+\texttt{(init op ... op pack)}  & бинарная левая \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}
+template<typename... Args>
+void print(Args... args) {
+    ((std::cout << args << ' '), ...);   // свёртка по запятой
+}
+template<typename... Args>
+bool all_true(Args... args) {
+    return (args && ...);                // все ли истинны
+}
+\end{lstlisting}
+
+\subsection{Perfect forwarding в вариативных шаблонах}
+
+Универсальная фабрика передаёт аргументы дальше \textbf{без потери} категории
+(lvalue/rvalue) через \texttt{std::forward}:
+
+\begin{lstlisting}
+template<typename T, typename... Args>
+std::unique_ptr<T> make(Args&&... args) {
+    return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+}
+\end{lstlisting}
+
+\texttt{Args\&\&...} --- пакет \textbf{forwarding-ссылок};
+\texttt{std::forward<Args>(args)...} разворачивает пакет, сохраняя категорию
+каждого аргумента.
+
+\subsection{Пример: типобезопасный кортеж и доступ по индексу}
+
+\begin{lstlisting}
+template<typename... Ts>
+struct Tuple {};   // упрощённо; в стандарте -- std::tuple
+
+std::tuple<int, std::string, double> t{1, "hi", 3.14};
+auto x = std::get<1>(t);              // "hi"
+auto [a, b, c] = t;                   // structured bindings
+\end{lstlisting}
+
+\subsection{Развёртка в разных контекстах}
+
+\begin{lstlisting}
+template<typename... Args>
+void demo(Args... args) {
+    f(args...);                  // f(a1, a2, a3)
+    g(h(args)...);               // g(h(a1), h(a2), h(a3))
+    int arr[] = {args...};       // инициализация массива
+    std::vector v{args...};
+}
+\end{lstlisting}
+
+
+% =======================================================
+\section{Метапрограммирование: constexpr, метафункции, SFINAE, концепты}
+
+% -------------------------------------------------------
+\subsection{Что такое метапрограммирование}
+
+\textbf{Шаблонное метапрограммирование (TMP)} --- вычисления, выполняемые
+\textbf{на этапе компиляции}. Результат --- типы и константы, «зашитые» в
+программу, без затрат в runtime.
+
+\subsection{\texttt{constexpr} --- вычисления на этапе компиляции}
+
+\texttt{constexpr}-функция может быть вычислена компилятором, если её аргументы
+известны на этапе компиляции:
+
+\begin{lstlisting}
+constexpr int factorial(int n) {
+    return (n <= 1) ? 1 : n * factorial(n - 1);
+}
+constexpr int f5 = factorial(5);   // 120, вычислено компилятором
+int arr[factorial(4)];             // 24 -- можно как размер массива
+\end{lstlisting}
+
+\begin{itemize}[leftmargin=2em]
+    \item \texttt{const} --- неизменяемость (может вычисляться в runtime).
+    \item \texttt{constexpr} --- \textbf{может} вычисляться на этапе компиляции.
+    \item \texttt{consteval} (C++20) --- \textbf{обязан} вычисляться на этапе
+          компиляции (immediate function).
+    \item \texttt{constinit} (C++20) --- гарантирует статическую инициализацию.
+\end{itemize}
+
+\subsubsection{\texttt{if constexpr} (C++17)}
+
+Ветвление на этапе компиляции: «неподходящая» ветка \textbf{не компилируется}:
+
+\begin{lstlisting}
+template<typename T>
+auto to_string(T value) {
+    if constexpr (std::is_arithmetic_v<T>)
+        return std::to_string(value);    // только для чисел
+    else
+        return value;                    // для остального
+}
+\end{lstlisting}
+
+\subsection{Метафункции и type traits}
+
+\textbf{Метафункция} --- шаблон, «возвращающий» тип или значение через вложенный
+\texttt{::type} или \texttt{::value}. Стандартные метафункции живут в
+\texttt{<type\_traits>}.
+
+\begin{lstlisting}
+#include <type_traits>
+std::is_integral<int>::value;        // true
+std::is_integral_v<int>;             // true (суффикс _v -- значение)
+std::remove_const<const int>::type;  // int
+std::remove_const_t<const int>;      // int (суффикс _t -- тип)
+std::is_same_v<int, int32_t>;        // true/false в зависимости от платформы
+\end{lstlisting}
+
+\subsubsection{Своя метафункция}
+
+\begin{lstlisting}
+// "вернуть" тип: убрать указатель
+template<typename T> struct remove_ptr        { using type = T; };
+template<typename T> struct remove_ptr<T*>    { using type = T; };  // спец-ция
+template<typename T> using remove_ptr_t = typename remove_ptr<T>::type;
+
+// "вернуть" значение: длина массива на этапе компиляции
+template<typename T, size_t N>
+constexpr size_t array_size(T(&)[N]) { return N; }
+\end{lstlisting}
+
+\subsection{SFINAE}
+
+\textbf{SFINAE (Substitution Failure Is Not An Error)}: если при подстановке
+шаблонных аргументов сигнатура оказывается некорректной, эта перегрузка
+\textbf{молча исключается} из набора кандидатов, а не вызывает ошибку.
+
+\begin{lstlisting}
+#include <type_traits>
+// версия только для целочисленных T
+template<typename T,
+         std::enable_if_t<std::is_integral_v<T>, int> = 0>
+void process(T x) { std::cout << "integral\n"; }
+
+// версия только для вещественных T
+template<typename T,
+         std::enable_if_t<std::is_floating_point_v<T>, int> = 0>
+void process(T x) { std::cout << "floating\n"; }
+
+process(42);     // "integral"
+process(3.14);   // "floating"
+\end{lstlisting}
+
+\subsubsection{Идиома detection (проверка наличия члена)}
+
+\begin{lstlisting}
+// есть ли у T метод .size()?
+template<typename T, typename = void>
+struct has_size : std::false_type {};
+
+template<typename T>
+struct has_size<T, std::void_t<decltype(std::declval<T>().size())>>
+    : std::true_type {};
+
+has_size<std::vector<int>>::value;  // true
+has_size<int>::value;               // false
+\end{lstlisting}
+
+\subsection{Концепты (C++20)}
+
+\textbf{Концепты} --- именованные ограничения на типы. Они заменяют громоздкий
+SFINAE, дают \textbf{читаемые ошибки} и явно документируют требования.
+
+\begin{lstlisting}
+#include <concepts>
+template<typename T>
+concept Numeric = std::is_arithmetic_v<T>;   // своё ограничение
+
+template<Numeric T>          // T обязан быть числом
+T square(T x) { return x * x; }
+
+square(5);      // OK
+// square("s"); // понятная ошибка: "s" не удовлетворяет Numeric
+\end{lstlisting}
+
+\subsubsection{Способы применить ограничение}
+
+\begin{lstlisting}
+template<std::integral T> void f(T);            // на параметре шаблона
+template<typename T> requires std::integral<T>  // requires-clause
+void g(T);
+void h(std::integral auto x);                   // сокращённый синтаксис
+\end{lstlisting}
+
+\subsubsection{\texttt{requires}-выражение --- задаём свой концепт}
+
+\begin{lstlisting}
+template<typename T>
+concept Container = requires(T c) {
+    c.begin();              // должен быть begin()
+    c.end();                // должен быть end()
+    c.size();               // должен быть size()
+    typename T::value_type; // должен быть вложенный тип value_type
+};
+\end{lstlisting}
+
+\subsection{Зачем всё это: библиотечный код}
+
+Метапрограммирование --- основа стандартной библиотеки: \texttt{std::vector}
+выбирает оптимальные операции по traits типа, алгоритмы диспетчеризуются по
+категории итератора, \texttt{std::variant}/\texttt{std::tuple} построены на
+вариативных шаблонах. В прикладном коде стоит предпочитать \texttt{if constexpr}
+и концепты как наиболее читаемые инструменты.

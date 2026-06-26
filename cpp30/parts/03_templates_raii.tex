@@ -1,0 +1,302 @@
+% =======================================================
+% ШАБЛОНЫ и RAII
+% =======================================================
+
+\section{Шаблоны функций и классов. Специализация}
+
+% -------------------------------------------------------
+\subsection{Зачем нужны шаблоны}
+
+\textbf{Шаблоны} --- механизм \textbf{обобщённого программирования}: написать код
+один раз для \textbf{любого типа}, а компилятор сгенерирует конкретные версии.
+Это статический полиморфизм, без runtime-затрат.
+
+\subsection{Шаблоны функций}
+
+\begin{lstlisting}
+template<typename T>
+T max(T a, T b) {
+    return (a > b) ? a : b;
+}
+max(3, 5);        // T = int    (выведен из аргументов)
+max(2.5, 1.5);    // T = double
+max<int>(3, 5);   // T задан явно
+\end{lstlisting}
+
+\subsubsection{Вывод аргументов шаблона (template argument deduction)}
+
+Компилятор сам определяет \texttt{T} по типам аргументов. Если вывод
+неоднозначен, тип указывают явно:
+
+\begin{lstlisting}
+template<typename T> void f(T x);
+f(42);          // T = int
+f<double>(42);  // T = double явно
+\end{lstlisting}
+
+\subsection{Шаблоны классов}
+
+\begin{lstlisting}
+template<typename T>
+class Stack {
+    std::vector<T> data_;
+public:
+    void push(const T& x) { data_.push_back(x); }
+    T pop() { T t = data_.back(); data_.pop_back(); return t; }
+    bool empty() const { return data_.empty(); }
+};
+Stack<int> si;          // стек целых
+Stack<std::string> ss;  // стек строк
+\end{lstlisting}
+
+\subsubsection{Class Template Argument Deduction (CTAD, C++17)}
+
+С C++17 для шаблонов классов аргументы тоже могут выводиться:
+
+\begin{lstlisting}
+std::vector v = {1, 2, 3};   // std::vector<int>, тип выведен
+std::pair  p{1, 2.0};        // std::pair<int, double>
+\end{lstlisting}
+
+\subsection{Параметры шаблона}
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{Типовые:} \texttt{template<typename T>}.
+    \item \textbf{Нетиповые (NTTP):} значения, известные на этапе компиляции:
+          \texttt{template<int N>}, \texttt{template<auto V>}.
+    \item \textbf{Шаблонные:} шаблон как параметр шаблона.
+\end{itemize}
+
+\begin{lstlisting}
+template<typename T, size_t N>
+class Array {
+    T data_[N];   // N -- константа времени компиляции
+public:
+    constexpr size_t size() const { return N; }
+};
+Array<int, 5> a;   // массив на 5 int
+\end{lstlisting}
+
+\subsection{Полная специализация}
+
+Особая реализация шаблона для \textbf{конкретного} типа:
+
+\begin{lstlisting}
+template<typename T>
+struct TypeName { static const char* get() { return "unknown"; } };
+
+template<>   // полная специализация для bool
+struct TypeName<bool> { static const char* get() { return "bool"; } };
+
+template<>   // полная специализация для int
+struct TypeName<int> { static const char* get() { return "int"; } };
+\end{lstlisting}
+
+\subsection{Частичная специализация}
+
+Специализация не для одного типа, а для \textbf{семейства} типов. Доступна
+\textbf{только для шаблонов классов} (не функций):
+
+\begin{lstlisting}
+template<typename T>
+struct IsPointer { static constexpr bool value = false; };
+
+template<typename T>            // частичная: для любых указателей T*
+struct IsPointer<T*> { static constexpr bool value = true; };
+
+IsPointer<int>::value;    // false
+IsPointer<int*>::value;   // true
+\end{lstlisting}
+
+\textbf{Для функций} вместо частичной специализации используют перегрузку.
+
+\subsection{Двухфазная компиляция и \texttt{typename}/\texttt{template}}
+
+Шаблон компилируется в два прохода: сначала проверяется код, не зависящий от
+параметров, при инстанцировании --- зависимый. Перед зависимым именем типа нужен
+\texttt{typename}:
+
+\begin{lstlisting}
+template<typename T>
+void f() {
+    typename T::value_type x;   // typename: говорим "это тип"
+    typename std::vector<T>::iterator it;
+}
+\end{lstlisting}
+
+\subsection{Где определять шаблоны}
+
+Определение шаблона должно быть видимо в точке инстанцирования, поэтому шаблоны
+обычно пишут \textbf{целиком в заголовках} (а не разделяют на \texttt{.h}/\texttt{.cpp}).
+
+\subsection{Переменные-шаблоны и \texttt{constexpr}}
+
+\begin{lstlisting}
+template<typename T>
+constexpr T pi = T(3.1415926535897932385);
+auto x = pi<float>;   // 3.14159f
+\end{lstlisting}
+
+\subsection{Концепты (C++20) --- кратко}
+
+Концепты ограничивают допустимые типы и дают понятные ошибки (подробно --- в
+разделе о метапрограммировании):
+
+\begin{lstlisting}
+#include <concepts>
+template<std::integral T>   // только целочисленные T
+T half(T x) { return x / 2; }
+\end{lstlisting}
+
+
+% =======================================================
+\section{RAII. Умные указатели}
+
+% -------------------------------------------------------
+\subsection{Идиома RAII}
+
+\textbf{RAII (Resource Acquisition Is Initialization)} --- ключевая идиома C++:
+\textbf{ресурс захватывается в конструкторе и освобождается в деструкторе}.
+Поскольку деструктор вызывается автоматически (в т.\,ч. при исключении), ресурс
+не утечёт.
+
+\begin{lstlisting}
+class FileGuard {
+    FILE* f_;
+public:
+    explicit FileGuard(const char* name) : f_(fopen(name, "r")) {}
+    ~FileGuard() { if (f_) fclose(f_); }   // освобождение гарантировано
+    FileGuard(const FileGuard&) = delete;  // не копируем владение
+    FILE* get() const { return f_; }
+};
+
+void process() {
+    FileGuard fg("data.txt");
+    // ... даже если здесь бросится исключение ...
+}   // ~FileGuard() вызовется и закроет файл в любом случае
+\end{lstlisting}
+
+\textbf{Под RAII попадают:} память, файлы, мьютексы (\texttt{std::lock\_guard}),
+сокеты, соединения с БД --- любой ресурс с парой «захват/освобождение».
+
+\subsection{Проблема сырых указателей}
+
+\begin{lstlisting}
+void leak() {
+    Widget* w = new Widget();
+    if (error()) return;   // УТЕЧКА: delete не вызовется
+    delete w;
+}
+\end{lstlisting}
+
+Умные указатели --- это RAII для динамической памяти: они \textbf{сами} вызывают
+\texttt{delete}.
+
+\subsection{\texttt{std::unique\_ptr} --- единоличное владение}
+
+Владеет объектом эксклюзивно. Нельзя копировать (только перемещать). Нулевые
+накладные расходы по сравнению с сырым указателем.
+
+\begin{lstlisting}
+#include <memory>
+std::unique_ptr<Widget> p = std::make_unique<Widget>(args);
+p->method();              // как обычный указатель
+// auto q = p;            // ОШИБКА: копирование запрещено
+auto q = std::move(p);    // передача владения: теперь p == nullptr
+// при выходе из области видимости q сам сделает delete
+\end{lstlisting}
+
+\textbf{Используйте \texttt{make\_unique}}, а не \texttt{new}: короче, безопаснее
+при исключениях, без дублирования типа.
+
+\subsubsection{unique\_ptr для массивов и кастомный делитер}
+
+\begin{lstlisting}
+std::unique_ptr<int[]> arr = std::make_unique<int[]>(10);  // массив
+std::unique_ptr<FILE, decltype(&fclose)> f(fopen("x","r"), &fclose);
+\end{lstlisting}
+
+\subsection{\texttt{std::shared\_ptr} --- разделяемое владение}
+
+Несколько \texttt{shared\_ptr} владеют одним объектом совместно. Внутри ---
+\textbf{счётчик ссылок (reference count)}. Объект уничтожается, когда счётчик
+доходит до нуля.
+
+\begin{lstlisting}
+std::shared_ptr<Widget> p1 = std::make_shared<Widget>();
+std::shared_ptr<Widget> p2 = p1;   // счётчик = 2 (копирование разрешено)
+std::cout << p1.use_count();       // 2
+p2.reset();                        // счётчик = 1
+// объект жив, пока есть хоть один владелец
+\end{lstlisting}
+
+\textbf{\texttt{make\_shared} эффективнее}: выделяет объект и управляющий блок
+(со счётчиком) одним аллокатором.
+
+\subsubsection{Накладные расходы}
+
+\texttt{shared\_ptr} весит как два указателя (на объект и на управляющий блок),
+а изменение счётчика --- \textbf{атомарная} операция (потокобезопасно, но не
+бесплатно). Если разделение не нужно --- используйте \texttt{unique\_ptr}.
+
+\subsection{\texttt{std::weak\_ptr} --- слабая ссылка}
+
+\texttt{weak\_ptr} наблюдает за объектом \texttt{shared\_ptr}, \textbf{не увеличивая
+счётчик}. Чтобы получить доступ, его «повышают» через \texttt{lock()}.
+
+\begin{lstlisting}
+std::shared_ptr<Widget> sp = std::make_shared<Widget>();
+std::weak_ptr<Widget> wp = sp;     // не владеет
+
+if (auto locked = wp.lock()) {     // shared_ptr, если объект ещё жив
+    locked->method();
+} else {
+    // объект уже уничтожен
+}
+\end{lstlisting}
+
+\subsubsection{Решение проблемы циклических ссылок}
+
+Два \texttt{shared\_ptr}, ссылающиеся друг на друга, создают \textbf{цикл} ---
+счётчики никогда не дойдут до нуля, память утечёт. Один из указателей делают
+\texttt{weak\_ptr}:
+
+\begin{lstlisting}
+struct Node {
+    std::shared_ptr<Node> next;   // владеет следующим
+    std::weak_ptr<Node>   prev;   // НЕ владеет предыдущим -> нет цикла
+};
+\end{lstlisting}
+
+\subsection{Сравнение умных указателей}
+
+\begin{center}
+\begin{tabular}{lp{4cm}p{4.5cm}}
+\toprule
+& \textbf{Владение} & \textbf{Когда использовать} \\
+\midrule
+\texttt{unique\_ptr} & единоличное & по умолчанию; один владелец \\
+\addlinespace
+\texttt{shared\_ptr} & разделяемое & несколько владельцев \\
+\addlinespace
+\texttt{weak\_ptr}   & не владеет  & наблюдение, разрыв циклов \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Передача умных указателей в функции}
+
+\begin{itemize}[leftmargin=2em]
+    \item Функция \textbf{забирает владение} --- \texttt{unique\_ptr<T>} по
+          значению (передавать через \texttt{std::move}).
+    \item Функция \textbf{разделяет владение} --- \texttt{shared\_ptr<T>} по
+          значению.
+    \item Функция \textbf{только использует} объект --- передавайте
+          \texttt{T*} или \texttt{T\&}, а не умный указатель.
+\end{itemize}
+
+\begin{lstlisting}
+void use(const Widget& w);            // просто использует -- ссылка
+void take(std::unique_ptr<Widget> w); // забирает владение
+take(std::move(p));
+\end{lstlisting}

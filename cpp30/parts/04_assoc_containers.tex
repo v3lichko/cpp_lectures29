@@ -1,0 +1,164 @@
+% =======================================================
+% АССОЦИАТИВНЫЕ КОНТЕЙНЕРЫ
+% =======================================================
+
+\section{STL: ассоциативные контейнеры}
+
+% -------------------------------------------------------
+\subsection{Обзор}
+
+\textbf{Ассоциативные контейнеры} хранят элементы, доступные по \textbf{ключу}, а
+не по позиции. Делятся на две группы:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Группа} & \textbf{Контейнеры} & \textbf{Сложность поиска} \\
+\midrule
+Упорядоченные (дерево) & \texttt{map}, \texttt{set}, \texttt{multimap}, \texttt{multiset} & $O(\log n)$ \\
+\addlinespace
+Неупорядоченные (хеш) & \texttt{unordered\_map}, \texttt{unordered\_set}, \dots & $O(1)$ в среднем \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{\texttt{std::set} --- упорядоченное множество}
+
+Хранит \textbf{уникальные} ключи в отсортированном порядке. Реализован
+красно-чёрным деревом.
+
+\begin{lstlisting}
+#include <set>
+std::set<int> s = {3, 1, 4, 1, 5};   // дубликат 1 игнорируется
+// хранится отсортированно: 1 3 4 5
+s.insert(2);
+s.count(3);        // 1 (есть) или 0 (нет)
+s.contains(3);     // C++20: bool
+s.erase(4);
+for (int x : s) std::cout << x;   // обход в порядке возрастания
+\end{lstlisting}
+
+\subsection{\texttt{std::map} --- упорядоченный словарь}
+
+Хранит пары \textbf{ключ--значение} с уникальными ключами, отсортированными по
+ключу.
+
+\begin{lstlisting}
+#include <map>
+std::map<std::string, int> ages;
+ages["Alice"] = 30;          // вставка/изменение через []
+ages["Bob"]   = 25;
+ages.insert({"Carol", 28});
+
+for (const auto& [name, age] : ages)   // structured bindings (C++17)
+    std::cout << name << ": " << age << '\n';   // в порядке ключей
+\end{lstlisting}
+
+\subsubsection{Осторожно с \texttt{operator[]}}
+
+\texttt{operator[]} \textbf{создаёт} элемент со значением по умолчанию, если ключа
+нет --- это меняет map и не работает на \texttt{const map}:
+
+\begin{lstlisting}
+std::map<std::string, int> m;
+int x = m["missing"];   // СОЗДАЁТ запись {"missing", 0}!
+
+// безопасные способы чтения:
+auto it = m.find("key");
+if (it != m.end()) use(it->second);
+int y = m.at("key");    // бросает std::out_of_range, если ключа нет
+\end{lstlisting}
+
+\subsubsection{Эффективная вставка}
+
+\begin{lstlisting}
+m.insert_or_assign("key", 5);       // C++17: вставить или перезаписать
+m.try_emplace("key", expensive());  // C++17: не вычисляет value, если ключ есть
+auto [it, inserted] = m.emplace("k", 1);  // inserted == был ли вставлен
+\end{lstlisting}
+
+\subsection{\texttt{multiset} и \texttt{multimap}}
+
+Допускают \textbf{дубликаты} ключей. У \texttt{multimap} нет \texttt{operator[]}.
+Все элементы с данным ключом получают через \texttt{equal\_range}:
+
+\begin{lstlisting}
+std::multimap<std::string, int> mm;
+mm.insert({"a", 1});
+mm.insert({"a", 2});       // дубликат ключа разрешён
+auto [begin, end] = mm.equal_range("a");
+for (auto it = begin; it != end; ++it) std::cout << it->second;
+\end{lstlisting}
+
+\subsection{Неупорядоченные контейнеры (хеш-таблицы)}
+
+\texttt{unordered\_set} / \texttt{unordered\_map} хранят элементы в хеш-таблице:
+поиск/вставка в среднем $O(1)$, но порядок не определён.
+
+\begin{lstlisting}
+#include <unordered_map>
+std::unordered_map<std::string, int> h;
+h["one"] = 1;       // O(1) в среднем
+h.count("one");
+\end{lstlisting}
+
+\subsubsection{Устройство хеш-таблицы}
+
+Элементы раскладываются по \textbf{корзинам (buckets)} по значению хеш-функции.
+При совпадении хешей (\textbf{коллизии}) элементы в одной корзине образуют цепочку.
+\textbf{Load factor} = число элементов / число корзин; при превышении порога
+происходит \textbf{rehash} --- перестроение таблицы.
+
+\begin{lstlisting}
+h.load_factor();          // текущая загрузка
+h.max_load_factor(0.7);   // порог рехеша
+h.reserve(1000);          // заранее выделить корзины, избежать рехешей
+\end{lstlisting}
+
+\subsubsection{Свой хеш для пользовательского типа}
+
+\begin{lstlisting}
+struct Point { int x, y; };
+struct PointHash {
+    size_t operator()(const Point& p) const {
+        return std::hash<int>{}(p.x) ^ (std::hash<int>{}(p.y) << 1);
+    }
+};
+std::unordered_map<Point, int, PointHash> grid;
+\end{lstlisting}
+
+\subsection{Упорядоченные vs неупорядоченные: что выбрать}
+
+\begin{center}
+\begin{tabular}{lp{4.3cm}p{4.3cm}}
+\toprule
+& \textbf{map/set (дерево)} & \textbf{unordered (хеш)} \\
+\midrule
+Поиск/вставка & $O(\log n)$ & $O(1)$ в среднем, $O(n)$ худший \\
+\addlinespace
+Порядок обхода & отсортирован & произвольный \\
+\addlinespace
+Требование к ключу & \texttt{operator<} & хеш + \texttt{operator==} \\
+\addlinespace
+Range-запросы & да (\texttt{lower\_bound}) & нет \\
+\addlinespace
+Инвалидация итераторов при вставке & нет & да (при рехеше) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Правило:} нужен порядок или диапазонные запросы --- \texttt{map}/\texttt{set};
+нужна максимальная скорость поиска по точному ключу --- \texttt{unordered\_*}.
+
+\subsection{Кастомный компаратор для упорядоченных контейнеров}
+
+\begin{lstlisting}
+std::set<int, std::greater<int>> desc;   // по убыванию
+// свой компаратор:
+struct ByLength {
+    bool operator()(const std::string& a, const std::string& b) const {
+        return a.size() < b.size();
+    }
+};
+std::set<std::string, ByLength> by_len;
+\end{lstlisting}

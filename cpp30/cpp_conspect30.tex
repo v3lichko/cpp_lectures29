@@ -52,6 +52,10 @@
 \newpage
 
 % -------------------------------------------------------
+\input{parts/01_fundamentals.tex}
+\input{parts/02_oop.tex}
+\input{parts/03_templates_raii.tex}
+
 \section{Исключения в C++}
 
 % -------------------------------------------------------
@@ -1621,6 +1625,8 @@ std::cout << x;      // UB -- reference invalidation
 разбросаны по бакетам, и их нельзя реаллоцировать одним куском.
 
 % -------------------------------------------------------
+\input{parts/04_assoc_containers.tex}
+
 \section{Адаптеры контейнеров}
 
 \texttt{std::stack}, \texttt{std::queue} и \texttt{std::priority\_queue}
@@ -7017,5 +7023,7 @@ T* create(Args&&... args) {
 struct Point { int x, y; };
 auto* p = create<Point>(1, 2); // конструируется напрямую, без лишних копий
 \end{lstlisting}
+
+\input{parts/05_variadic_metaprog.tex}
 
 \end{document}
